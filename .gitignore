@@ -1,0 +1,64 @@
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+out/
+output/
+install/
+
+# Binary files
+*.o
+*.a
+*.so
+*.so.*
+*.elf
+*.bin
+*.img
+*.map
+
+# Logs
+*.log
+logs/
+
+# Video / image test outputs
+*.h264
+*.h265
+*.mp4
+*.mkv
+*.avi
+*.yuv
+*.nv12
+*.rgb
+*.raw
+*.jpg
+*.jpeg
+*.png
+
+# Large model files
+*.rknn
+*.onnx
+*.pt
+*.pth
+*.engine
+
+# SDK / toolchains / sysroot
+sdk/
+rk3568_linux_sdk/
+toolchains/
+sysroot/
+rootfs/
+kernel/
+u-boot/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+tmp/
+.cache/
