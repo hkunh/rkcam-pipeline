@@ -14,6 +14,6 @@
 	std::printf("[INFO] " fmt "\n", ##__VA_ARGS__)
 
 #define RKCAM_LOGE(fmt, ...) \
-	std::print(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__)
+	std::fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__)
 
 

@@ -8,20 +8,27 @@
 
 #pragma once
 
+
+#include <vector>
 #include <cstdint>
 #include <cstddef>
 
 namespace rkcam {
 
+
+#define VIDEO_MAX_PLANES 8
+
 enum class PixelFormat {
     Unknown,
     NV12,
-    NV21,
-    YUYV,
-    RGB888,
-    BGR888,
-    RAW10,
-    RAW12,
+};
+
+
+struct VideoPlane{
+    void* data = nullptr;
+    size_t length = 0;
+    size_t bytesused = 0;
+    int dma_fd = -1;
 };
 
 struct VideoFrame {
@@ -35,10 +42,11 @@ struct VideoFrame {
     int64_t duration_us = 0;
     int64_t frame_id = 0;
 
-    void* data = nullptr;
-    size_t size = 0;
+    std::vector<VideoPlane> planes;
 
-    int dma_fd = -1;
+
+    // V4L2 MMAP buffer 生命周期管理用
+    int buffer_index = -1;
 };
 
 }

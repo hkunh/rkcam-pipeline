@@ -17,6 +17,7 @@ public:
 	virtual bool open() = 0;
 	virtual bool start() = 0;
 	virtual bool readFrame(VideoFrame& frame) = 0;
+	virtual bool releaseFrame(const VideoFrame& frame) = 0;
 	virtual bool stop() = 0;
 	virtual bool close() = 0;
 };
