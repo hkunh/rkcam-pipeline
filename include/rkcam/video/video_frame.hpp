@@ -29,12 +29,12 @@ struct VideoPlane{
     size_t length = 0;
     size_t bytesused = 0;
     int dma_fd = -1;
+    int stride = 0; 
 };
 
 struct VideoFrame {
     int width = 0;
     int height = 0;
-    int stride = 0;
 
     PixelFormat format = PixelFormat::Unknown;
 

@@ -3,6 +3,7 @@ add_executable(rkcamd
 )
 
 target_link_libraries(rkcamd PRIVATE
-	rkcam_core
-	rkcam_pipeline_lib
+	rkcam::core
+	rkcam::pipeline
+	rkcam::video_source
 )

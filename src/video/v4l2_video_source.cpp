@@ -234,15 +234,16 @@ bool V4L2VideoSource::setFormat(){
             return false;
         }
 
-		stride_ = static_cast<int>(fmt.fmt.pix_mp.plane_fmt[0].bytesperline);
-
         RKCAM_LOGI("Set MPLANE format:");
         RKCAM_LOGI("  width       : %d", width_);
         RKCAM_LOGI("  height      : %d", height_);
         RKCAM_LOGI("  pixelformat : %s", fourccToString(v4l2_pixfmt_).c_str());
         RKCAM_LOGI("  num_planes  : %u", num_planes_);
+		plane_strides_.clear();
+		plane_strides_.resize(num_planes_);
 		for(uint32_t i = 0; i < num_planes_; i++)
 		{
+			plane_strides_[i] =static_cast<int>(fmt.fmt.pix_mp.plane_fmt[i].bytesperline);
 			RKCAM_LOGI("plane[%u]: bytesperline=%u sizeimage=%u",
 						i,
 						fmt.fmt.pix_mp.plane_fmt[i].bytesperline,
@@ -268,7 +269,8 @@ bool V4L2VideoSource::setFormat(){
 		}
 		width_ = static_cast<int>(fmt.fmt.pix.width);
     	height_ = static_cast<int>(fmt.fmt.pix.height);
-		stride_ = static_cast<int>(fmt.fmt.pix.bytesperline);
+		plane_strides_.clear();
+		plane_strides_.push_back(static_cast<int>(fmt.fmt.pix.bytesperline));
 		num_planes_ = 1;
 
 		v4l2_pixfmt_ = fmt.fmt.pix.pixelformat;
@@ -573,7 +575,6 @@ bool V4L2VideoSource::readFrame(VideoFrame& frame)
 
 		frame.width = width_;
 		frame.height = height_;
-		frame.stride = stride_;
 		frame.format = pixel_format_;
 		frame.frame_id = frame_id_ ++;
 		frame.buffer_index = static_cast<int>(buf.index);
@@ -588,6 +589,7 @@ bool V4L2VideoSource::readFrame(VideoFrame& frame)
 				plane.data = buffers_[buf.index].planes[p].start;
 				plane.length = buffers_[buf.index].planes[p].length;
 				plane.bytesused = planes[p].bytesused;
+				plane.stride = p < plane_strides_.size() ? plane_strides_[p] : 0;
 				plane.dma_fd = -1;
 				frame.planes.push_back(plane);
 			}
@@ -597,6 +599,7 @@ bool V4L2VideoSource::readFrame(VideoFrame& frame)
 			plane.data = buffers_[buf.index].planes[0].start;
 			plane.length = buffers_[buf.index].planes[0].length;
 			plane.bytesused = buf.bytesused;
+			plane.stride = !plane_strides_.empty() ? plane_strides_[0] : 0;
 			plane.dma_fd = -1;
 			frame.planes.push_back(plane);
 		}

@@ -83,7 +83,7 @@ private:
 
     int width_ = 0;
     int height_ = 0;
-    int stride_ = 0;
+    std::vector<int> plane_strides_;
     int64_t frame_id_ = 0;
     
     std::vector<MappedBuffer> buffers_;

@@ -1,27 +1,35 @@
 add_library(rkcam_core
-	core/log.cpp
-	core/timestamp.cpp
-	core/blocking_queue.cpp
-	)
+    core/log.cpp
+    core/timestamp.cpp
+    core/blocking_queue.cpp
+)
 
-target_include_directories(rkcam_core PUBLIC 
-	${CMAKE_SOURCE_DIR}/include
-	)
+target_include_directories(rkcam_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+add_library(rkcam::core ALIAS rkcam_core)
+
 
 add_library(rkcam_video_source
-	video/v4l2_video_source.cpp
-	)
+    video/v4l2_video_source.cpp
+)
 
 target_link_libraries(rkcam_video_source PUBLIC
-	rkcam_core
-	)
+    rkcam::core
+)
 
-add_library(rkcam_pipeline_lib 
-	pipeline/pipeline.cpp
-	)
+add_library(rkcam::video_source ALIAS rkcam_video_source)
 
-target_link_libraries(rkcam_pipeline_lib PUBLIC
-	rkcam_core
-	rkcam_video_source
-	)
 
+add_library(rkcam_pipeline
+    pipeline/pipeline.cpp
+    pipeline/pipeline_video_frame.cpp
+)
+
+target_link_libraries(rkcam_pipeline PUBLIC
+    rkcam::core
+    rkcam::video_source
+)
+
+add_library(rkcam::pipeline ALIAS rkcam_pipeline)
