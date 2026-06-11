@@ -25,6 +25,7 @@ add_library(rkcam::video_source ALIAS rkcam_video_source)
 add_library(rkcam_pipeline
     pipeline/pipeline.cpp
     pipeline/pipeline_video_frame.cpp
+    pipeline/capture_stage.cpp
 )
 
 target_link_libraries(rkcam_pipeline PUBLIC

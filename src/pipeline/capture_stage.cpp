@@ -1,0 +1,1 @@
+#include "rkcam/pipeline/capture_stage.hpp"
