@@ -32,7 +32,7 @@ struct VideoPlane{
     int stride = 0; 
 };
 
-struct VideoFrame {
+struct VideoSourceFrame {
     int width = 0;
     int height = 0;
 

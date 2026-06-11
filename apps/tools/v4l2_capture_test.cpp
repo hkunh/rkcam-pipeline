@@ -654,7 +654,7 @@ int main(int argc, char **argv)
 
     while(captured < opt.count)
     {
-        rkcam::VideoFrame frame;
+        rkcam::VideoSourceFrame frame;
         if(!source.readFrame(frame))
         {
             RKCAM_LOGE("readFrame failed");

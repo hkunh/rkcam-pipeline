@@ -6,7 +6,7 @@
 
 namespace rkcam{
 
-bool copyVideoFrameToCpuPipelineFrame(const VideoFrame& src, 
+bool copyVideoFrameToCpuPipelineFrame(const VideoSourceFrame& src, 
                                 PipelineVideoFrame& dst,
                                 const std::string& stream_id){
     if (src.planes.empty()) {

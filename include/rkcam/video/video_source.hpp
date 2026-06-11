@@ -8,7 +8,7 @@
 
 
 #pragma once
-#include "rkcam/video/video_frame.hpp"
+#include "rkcam/video/video_source_frame.hpp"
 
 namespace rkcam{
 class IVideoSource{
@@ -16,8 +16,8 @@ public:
 	virtual ~IVideoSource() = default;
 	virtual bool open() = 0;
 	virtual bool start() = 0;
-	virtual bool readFrame(VideoFrame& frame) = 0;
-	virtual bool releaseFrame(const VideoFrame& frame) = 0;
+	virtual bool readFrame(VideoSourceFrame& frame) = 0;
+	virtual bool releaseFrame(const VideoSourceFrame& frame) = 0;
 	virtual bool stop() = 0;
 	virtual bool close() = 0;
 };

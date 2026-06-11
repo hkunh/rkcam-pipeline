@@ -1,6 +1,6 @@
 
 #pragma once
-#include "rkcam/video/video_frame.hpp"
+#include "rkcam/video/video_source_frame.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -96,5 +96,5 @@ struct PipelineVideoFrame{
      */
     std::shared_ptr<VideoBuffer> buffer;
 };
-bool copyVideoFrameToCpuPipelineFrame(const VideoFrame& src, PipelineVideoFrame& dst, const std::string& stream_id);
+bool copyVideoFrameToCpuPipelineFrame(const VideoSourceFrame& src, PipelineVideoFrame& dst, const std::string& stream_id);
 }

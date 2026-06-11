@@ -531,7 +531,7 @@ V4L2VideoSource::WaitResult V4L2VideoSource::waitForFrame(int timeout_sec){
     }
 }
 
-bool V4L2VideoSource::readFrame(VideoFrame& frame)
+bool V4L2VideoSource::readFrame(VideoSourceFrame& frame)
 {
 	if(!streaming_){
 		RKCAM_LOGE("stream is not on");
@@ -607,7 +607,7 @@ bool V4L2VideoSource::readFrame(VideoFrame& frame)
 	}
 }
 
-bool V4L2VideoSource::releaseFrame(const VideoFrame& frame)
+bool V4L2VideoSource::releaseFrame(const VideoSourceFrame& frame)
 {
 	if (frame.buffer_index < 0) {
         RKCAM_LOGE("invalid frame buffer_index=%d", frame.buffer_index);

@@ -53,7 +53,7 @@ int main()
     auto last = t0;
     while(g_running)
     {
-        rkcam::VideoFrame frame;
+        rkcam::VideoSourceFrame frame;
         if(!source.readFrame(frame)){
             continue;
         }

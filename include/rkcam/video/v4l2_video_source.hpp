@@ -24,8 +24,8 @@ public:
 
     bool open() override;
     bool start() override;
-    bool readFrame(VideoFrame& frame) override;
-    bool releaseFrame(const VideoFrame& frame) override;
+    bool readFrame(VideoSourceFrame& frame) override;
+    bool releaseFrame(const VideoSourceFrame& frame) override;
     bool stop() override;
     bool close() override;
     bool updateConfig(const V4L2VideoSourceConfig& config);
