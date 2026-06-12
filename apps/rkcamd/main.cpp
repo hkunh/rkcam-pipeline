@@ -6,7 +6,10 @@
 *@return 
 */
 
+#include "rkcam/core/blocking_queue.hpp"
 #include "rkcam/core/log.hpp"
+#include "rkcam/pipeline/capture_stage.hpp"
+#include "rkcam/pipeline/fps_stage.hpp"
 #include "rkcam/video/v4l2_video_source.hpp"
 
 
@@ -24,68 +27,61 @@ static void signalHandler(int)
 
 int main()
 {
-    RKCAM_LOGI("rkcamd start");
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    rkcam::V4L2VideoSourceConfig config;
-    config.device = "/dev/video0";
-    config.width = 1920;
-    config.height = 1080;
-    config.pixel_format = "NV12";
-    config.buffer_count = 4;
+    rkcam::BlockingQueue<rkcam::PipelineVideoFrame> raw_queue(
+        4,
+        rkcam::QueueFullPolicy::DropOldest);
 
-    rkcam::V4L2VideoSource source(config);
-        if (!source.open()) {
-        RKCAM_LOGE("source.open failed");
+    rkcam::V4L2VideoSourceConfig source_cfg;
+    source_cfg.device = "/dev/video0";
+    source_cfg.width = 1920;
+    source_cfg.height = 1080;
+    source_cfg.pixel_format = "NV12";
+    source_cfg.buffer_count = 4;
+
+    auto source = std::make_unique<rkcam::V4L2VideoSource>(source_cfg);
+
+    rkcam::CaptureStageConfig capture_cfg;
+    capture_cfg.stream_id = "cam0";
+    capture_cfg.output_memory_type = rkcam::VideoMemoryType::Cpu;
+
+    rkcam::FpsStageConfig fps_cfg;
+    fps_cfg.stage_name = "fps";
+    fps_cfg.print_interval_sec = 1.0;
+
+    rkcam::FpsStage fps_stage(fps_cfg, raw_queue);
+    rkcam::CaptureStage capture_stage(
+        capture_cfg,
+        std::move(source),
+        raw_queue);
+
+    if (!fps_stage.start()) {
+        RKCAM_LOGE("fps_stage start failed");
         return 1;
     }
 
-    if (!source.start()) {
-        RKCAM_LOGE("source.start failed");
-        source.close();
+    if (!capture_stage.start()) {
+        RKCAM_LOGE("capture_stage start failed");
+        raw_queue.stop();
+        fps_stage.stop();
         return 1;
     }
 
-    RKCAM_LOGI("rkcamd capture loop start");
-    int64_t frame_count = 0;
-    auto t0 = std::chrono::steady_clock::now();
-    auto last = t0;
-    while(g_running)
-    {
-        rkcam::VideoSourceFrame frame;
-        if(!source.readFrame(frame)){
-            continue;
-        }
-        frame_count ++;
-        if(!source.releaseFrame(frame))
-        {
-            RKCAM_LOGE("releaseFrame failed");
-            break;
-        }
+    RKCAM_LOGI("pipeline test started");
 
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration<double>(now - last).count();
-        if(elapsed >= 1.0)
-        {
-            auto total_elapsed = std::chrono::duration<double>(now - t0).count();
-            double avg_fps = total_elapsed > 0 ? (static_cast<double>(frame_count) / total_elapsed) : 0.0;
-            RKCAM_LOGI("frames=%lld, avg_fps=%.2f",
-                       static_cast<long long>(frame_count),
-                       avg_fps);
-            last = now;
-        }
-
-
+    while (g_running) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    
-    RKCAM_LOGI("rkcamd stopping");
 
-    source.stop();
-    source.close();
+    RKCAM_LOGI("pipeline test stopping");
 
-    RKCAM_LOGI("rkcamd exit, total frames=%lld",
-               static_cast<long long>(frame_count));
-    
+    capture_stage.stop();
+    raw_queue.stop();
+    fps_stage.stop();
+
+    RKCAM_LOGI("pipeline test exit");
+
     return 0;
 }

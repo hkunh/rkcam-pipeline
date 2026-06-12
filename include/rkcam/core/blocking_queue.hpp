@@ -44,7 +44,7 @@ public:
             not_full_cv_.wait(lock, [this](){
                 return stopped_ || queue_.size() < capacity_;
             });
-            if(stopped)
+            if(stopped_)
             {
                 return false;
             }
