@@ -628,7 +628,7 @@ int main(int argc, char **argv)
     config.pixel_format = opt.format;
     config.buffer_count = 4;
     rkcam::V4L2VideoSource source(config);
-    
+
     if(!source.open())
     {
         RKCAM_LOGE("source.open failed");
@@ -676,6 +676,7 @@ int main(int argc, char **argv)
         captured++;
         if (captured % 30 == 0 || captured == opt.count) {
             RKCAM_LOGI("captured %d/%d", captured, opt.count);
+            // RKCAM_LOGI("captured palne[0] stride: &d", frame.planes[0].stride);
         }
     }
     auto t1 = std::chrono::steady_clock::now();

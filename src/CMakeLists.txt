@@ -27,6 +27,8 @@ add_library(rkcam_pipeline
     pipeline/pipeline_video_frame.cpp
     pipeline/capture_stage.cpp
     pipeline/fps_stage.cpp
+    pipeline/raw_save_stage.cpp
+    pipeline/camera_pipeline.cpp
 )
 
 target_link_libraries(rkcam_pipeline PUBLIC

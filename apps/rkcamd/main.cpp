@@ -1,87 +1,62 @@
-/**
-*@file main.cpp
-*@brief 
-*@author HKH368
-*@date 2026-05-29
-*@return 
-*/
-
-#include "rkcam/core/blocking_queue.hpp"
 #include "rkcam/core/log.hpp"
-#include "rkcam/pipeline/capture_stage.hpp"
-#include "rkcam/pipeline/fps_stage.hpp"
-#include "rkcam/video/v4l2_video_source.hpp"
-
+#include "rkcam/pipeline/camera_pipeline.hpp"
 
 #include <chrono>
 #include <csignal>
-#include <cstdlib>
-#include <string>
+#include <thread>
 
-bool g_running = true;
+static bool g_running = true;
+
 static void signalHandler(int)
 {
     g_running = false;
 }
-
 
 int main()
 {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    rkcam::BlockingQueue<rkcam::PipelineVideoFrame> raw_queue(
-        4,
-        rkcam::QueueFullPolicy::DropOldest);
+    rkcam::CameraPipelineConfig config;
 
-    rkcam::V4L2VideoSourceConfig source_cfg;
-    source_cfg.device = "/dev/video0";
-    source_cfg.width = 1920;
-    source_cfg.height = 1080;
-    source_cfg.pixel_format = "NV12";
-    source_cfg.buffer_count = 4;
+    config.stream_id = "cam0";
 
-    auto source = std::make_unique<rkcam::V4L2VideoSource>(source_cfg);
+    config.source.device = "/dev/video0";
+    config.source.width = 1920;
+    config.source.height = 1080;
+    config.source.pixel_format = "NV12";
+    config.source.buffer_count = 4;
 
-    rkcam::CaptureStageConfig capture_cfg;
-    capture_cfg.stream_id = "cam0";
-    capture_cfg.output_memory_type = rkcam::VideoMemoryType::Cpu;
+    config.capture_output_memory_type = rkcam::VideoMemoryType::Cpu;
 
-    rkcam::FpsStageConfig fps_cfg;
-    fps_cfg.stage_name = "fps";
-    fps_cfg.print_interval_sec = 1.0;
+    config.raw_queue_capacity = 4;
+    config.raw_queue_policy = rkcam::QueueFullPolicy::DropOldest;
 
-    rkcam::FpsStage fps_stage(fps_cfg, raw_queue);
-    rkcam::CaptureStage capture_stage(
-        capture_cfg,
-        std::move(source),
-        raw_queue);
+    // config.debug_stage = rkcam::CameraDebugStage::Fps;
+    // config.fps.stage_name = "fps";
+    // config.fps.print_interval_sec = 1.0;
 
-    if (!fps_stage.start()) {
-        RKCAM_LOGE("fps_stage start failed");
+    config.debug_stage = rkcam::CameraDebugStage::RawSave;
+
+    config.raw_save.stage_name = "raw_save";
+    config.raw_save.output_path = "/userdata/rkcam/output/pipeline_capture_1920x1080_nv12.yuv";
+    config.raw_save.max_frames = 100;
+    config.raw_save.save_tight_nv12 = true;
+    config.raw_save.stop_queue_when_done = true;
+
+    rkcam::CameraPipeline pipeline(config);
+
+    if (!pipeline.start()) {
+        RKCAM_LOGE("CameraPipeline start failed");
         return 1;
     }
 
-    if (!capture_stage.start()) {
-        RKCAM_LOGE("capture_stage start failed");
-        raw_queue.stop();
-        fps_stage.stop();
-        return 1;
-    }
-
-    RKCAM_LOGI("pipeline test started");
-
-    while (g_running) {
+    while (g_running && pipeline.isRunning()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    RKCAM_LOGI("pipeline test stopping");
+    pipeline.stop();
 
-    capture_stage.stop();
-    raw_queue.stop();
-    fps_stage.stop();
-
-    RKCAM_LOGI("pipeline test exit");
-
+    RKCAM_LOGI("rkcamd exit");
     return 0;
 }

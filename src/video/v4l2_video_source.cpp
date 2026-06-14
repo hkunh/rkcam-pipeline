@@ -92,6 +92,8 @@ bool V4L2VideoSource::open()
         return false;
     }
 	opened_ = true;
+
+	enumFormats();
     return true;
 
 }
