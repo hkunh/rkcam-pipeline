@@ -15,6 +15,8 @@ struct V4L2VideoSourceConfig{
     int height = 1080;
     std::string pixel_format = "NV12";
     int buffer_count = 4;
+
+    bool export_dma_fd = false;
 };
 
 class V4L2VideoSource : public IVideoSource{
@@ -34,6 +36,8 @@ private:
     struct MappedPlane{
         void* start = nullptr;
         size_t length = 0;
+
+        int dma_fd = -1;
     };
     struct MappedBuffer{
         std::vector<MappedPlane> planes;
@@ -55,6 +59,7 @@ private:
     void cleanupBuffers();
 
     bool configure();
+    int exportDmaFd(uint32_t buffer_index, uint32_t plane_index);
 
     static int xioctl(int fd, unsigned long request, void* arg);
 

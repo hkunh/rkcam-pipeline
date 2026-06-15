@@ -7,3 +7,11 @@ target_link_libraries(v4l2_capture_test PRIVATE
     rkcam::video_source
 )
 
+add_executable(v4l2_dma_export_test
+    v4l2_dma_export_test.cpp
+)
+
+target_link_libraries(v4l2_dma_export_test PRIVATE
+    rkcam::core
+    rkcam::video_source
+)

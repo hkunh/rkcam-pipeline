@@ -349,6 +349,16 @@ bool V4L2VideoSource::initMmap(){
                     buffers_[i].planes[p].start = nullptr;
                     return false;
                 }
+
+				if(config_.export_dma_fd)
+				{
+					int dma_fd = exportDmaFd(i, p);
+					if (dma_fd < 0) {
+						RKCAM_LOGE("export dma fd failed: buffer=%u plane=%u", i, p);
+						return false;
+					}
+					buffers_[i].planes[p].dma_fd = dma_fd;
+				}
 				RKCAM_LOGI("mmap buffer[%u] plane[%u], length=%zu",
                            i,
                            p,
@@ -375,6 +385,17 @@ bool V4L2VideoSource::initMmap(){
                 buffers_[i].planes[0].start = nullptr;
                 return false;
             }
+
+			if(config_.export_dma_fd)
+			{
+				int dma_fd = exportDmaFd(i, 0);
+				if(dma_fd < 0)
+				{
+					RKCAM_LOGE("export dma fd failed: buffer=%u plane=0", i);
+        			return false;
+				}
+				buffers_[i].planes[0].dma_fd = dma_fd;
+			}
 
             RKCAM_LOGI("mmap buffer[%u], length=%zu",
                        i,
@@ -424,6 +445,11 @@ void V4L2VideoSource::cleanupBuffers(){
 				munmap(plane.start, plane.length);
 				plane.start = nullptr;
 				plane.length = 0;
+			}
+			if(plane.dma_fd >=0)
+			{
+				::close(plane.dma_fd);
+				plane.dma_fd = -1;
 			}
 		}
 	}
@@ -592,7 +618,7 @@ bool V4L2VideoSource::readFrame(VideoSourceFrame& frame)
 				plane.length = buffers_[buf.index].planes[p].length;
 				plane.bytesused = planes[p].bytesused;
 				plane.stride = p < plane_strides_.size() ? plane_strides_[p] : 0;
-				plane.dma_fd = -1;
+				plane.dma_fd = buffers_[buf.index].planes[p].dma_fd;
 				frame.planes.push_back(plane);
 			}
 		}
@@ -602,7 +628,7 @@ bool V4L2VideoSource::readFrame(VideoSourceFrame& frame)
 			plane.length = buffers_[buf.index].planes[0].length;
 			plane.bytesused = buf.bytesused;
 			plane.stride = !plane_strides_.empty() ? plane_strides_[0] : 0;
-			plane.dma_fd = -1;
+			plane.dma_fd = buffers_[buf.index].planes[0].dma_fd;
 			frame.planes.push_back(plane);
 		}
 		return true;
@@ -746,6 +772,32 @@ bool V4L2VideoSource::enumFormats(){
 
     return true;
 }
+
+
+int V4L2VideoSource::exportDmaFd(uint32_t buffer_index, uint32_t plane_index)
+{
+	v4l2_exportbuffer expbuf{};
+	expbuf.type = type_;
+	expbuf.index = buffer_index;
+	expbuf.plane = is_mplane_ ? plane_index : 0;
+	expbuf.flags = O_CLOEXEC;
+
+	if(xioctl(fd_, VIDIOC_EXPBUF, &expbuf) < 0)
+	{
+		RKCAM_LOGE("VIDIOC_EXPBUF failed: buffer=%u plane=%u error=%s",
+			buffer_index,
+			plane_index,
+			std::strerror(errno));
+        return -1;
+	}
+	RKCAM_LOGI("export dma_fd: buffer=%u plane=%u fd=%d",
+			buffer_index,
+			plane_index,
+			expbuf.fd);
+
+    return expbuf.fd;
+}
+
 bool V4L2VideoSource::close()
 {
     if (streaming_) {

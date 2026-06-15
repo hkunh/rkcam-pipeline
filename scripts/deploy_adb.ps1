@@ -29,6 +29,11 @@ $Files = @(
         LocalPath = Join-Path $BuildDir "apps\tools\v4l2_capture_test"
         RemotePath = "/userdata/rkcam/bin/v4l2_capture_test"
     }
+    @{
+        Name = "v4l2_dma_export_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\v4l2_dma_export_test"
+        RemotePath = "/userdata/rkcam/bin/v4l2_dma_export_test"
+    }
 )
 
 Write-Host "Project root: $RootDir"
@@ -68,7 +73,7 @@ foreach ($f in $Files) {
 
 # 设置可执行权限
 Write-Host "Setting executable permissions..."
-adb shell "chmod +x /userdata/rkcam/bin/rkcamd /userdata/rkcam/bin/camctl /userdata/rkcam/bin/v4l2_capture_test"
+adb shell "chmod +x /userdata/rkcam/bin/rkcamd /userdata/rkcam/bin/camctl /userdata/rkcam/bin/v4l2_capture_test /userdata/rkcam/bin/v4l2_dma_export_test"
 
 Write-Host ""
 Write-Host "deploy done"
