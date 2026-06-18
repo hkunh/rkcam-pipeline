@@ -28,11 +28,21 @@ $Files = @(
         Name = "v4l2_capture_test"
         LocalPath = Join-Path $BuildDir "apps\tools\v4l2_capture_test"
         RemotePath = "/userdata/rkcam/bin/v4l2_capture_test"
-    }
+    },
     @{
         Name = "v4l2_dma_export_test"
         LocalPath = Join-Path $BuildDir "apps\tools\v4l2_dma_export_test"
         RemotePath = "/userdata/rkcam/bin/v4l2_dma_export_test"
+    },
+    @{
+        Name = "rga_basic_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rga_basic_test"
+        RemotePath = "/userdata/rkcam/bin/rga_basic_test"
+    },
+    @{
+        Name = "rga_process_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rga_process_test"
+        RemotePath = "/userdata/rkcam/bin/rga_process_test"
     }
 )
 
@@ -73,7 +83,7 @@ foreach ($f in $Files) {
 
 # 设置可执行权限
 Write-Host "Setting executable permissions..."
-adb shell "chmod +x /userdata/rkcam/bin/rkcamd /userdata/rkcam/bin/camctl /userdata/rkcam/bin/v4l2_capture_test /userdata/rkcam/bin/v4l2_dma_export_test"
+adb shell "chmod +x /userdata/rkcam/bin/*"
 
 Write-Host ""
 Write-Host "deploy done"
