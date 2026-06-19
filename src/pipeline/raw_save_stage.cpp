@@ -192,11 +192,19 @@ bool RawSaveStage::writeFrameTightNv12(const PipelineVideoFrame& frame)
 {
     if(frame.width <= 0 || frame.height <= 0)
     {
+        RKCAM_LOGE("[%s] invalid NV12 size: %dx%d",
+            config_.stage_name.c_str(),
+            frame.width,
+            frame.height);
         return false;
     }
 
     const auto& planes = frame.buffer->planes;
-
+    if (planes.empty()) {
+        RKCAM_LOGE("[%s] NV12 frame has no planes",
+                   config_.stage_name.c_str());
+        return false;
+    }
     /*
      * 情况 1：
      *   单 plane NV12，plane[0] 中连续保存 Y + UV。
@@ -206,6 +214,10 @@ bool RawSaveStage::writeFrameTightNv12(const PipelineVideoFrame& frame)
         const auto& p0 = planes[0];
         if(!p0.data || p0.stride <= 0)
         {
+            RKCAM_LOGE("[%s] NV12 plane0 data is null, memory=%d dma_fd=%d",
+                       config_.stage_name.c_str(),
+                       static_cast<int>(frame.buffer->memory_type),
+                       p0.dma_fd);
             return false;
         }
         const int width = frame.width;

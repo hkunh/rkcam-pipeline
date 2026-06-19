@@ -26,6 +26,7 @@ add_library(rkcam_pipeline
     pipeline/fps_stage.cpp
     pipeline/raw_save_stage.cpp
     pipeline/camera_pipeline.cpp
+    pipeline/rga_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core

@@ -441,6 +441,7 @@ bool RgaProcessor::createCpuOutputFrame(
     plane.bytesused = size;
     plane.dma_fd = -1;
     plane.offset = 0;
+    plane.stride = stride_bytes;
 
     output.width = width;
     output.height = height;
