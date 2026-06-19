@@ -22,12 +22,6 @@ struct RawSaveStageConfig {
     std::string output_path = "/userdata/rkcam/output/capture_nv12.yuv";
 
     /*
-     * 最多保存多少帧。
-     * 0 表示不限制。
-     */
-    int max_frames = 100;
-
-    /*
      * true:
      *   对 NV12 按 width/height/stride 逐行保存成紧凑格式，
      *   方便 ffplay -pixel_format nv12 -video_size WxH 播放。
@@ -38,11 +32,6 @@ struct RawSaveStageConfig {
      */
     bool save_tight_nv12 = true;
 
-    /*
-     * 保存到 max_frames 后是否停止队列。
-     * 测试程序建议 true，这样保存完 100 帧后能让上游 CaptureStage 退出。
-     */
-    bool stop_queue_when_done = true;
 };
 
 class RawSaveStage : public IStage {

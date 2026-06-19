@@ -47,6 +47,15 @@ void RawSaveStage::stop()
     bool was_running = running_;
     running_ = false;
 
+    /*
+     * 外部强制 stop 时，用于唤醒阻塞在 pop() 的线程。
+     *
+     * 正常流程中：
+     *   上游 RgaStage / CaptureStage 会 stop 输出队列，
+     *   RawSaveStage 会自然收到 EOF 后退出。
+     *
+     * 这里重复 stop 是安全的。
+     */
     input_queue_.stop();
 
     if (thread_.joinable()) {
@@ -90,6 +99,16 @@ void RawSaveStage::threadLoop()
         PipelineVideoFrame frame;
         if(!input_queue_.pop(frame))
         {
+            /*
+             * pop 返回 false 的核心含义：
+             *   queue stopped 且 queue empty。
+             *
+             * 这就是上游发来的 EOF。
+             */
+            if (input_queue_.stopped()) {
+                break;
+            }
+
             continue;
         }
         if(!writeFrame(frame))
@@ -102,36 +121,17 @@ void RawSaveStage::threadLoop()
         }
 
         ++saved_frames_;
-        if (saved_frames_ % 30 == 0 || 
-            (config_.max_frames > 0 && saved_frames_ == config_.max_frames)) {
+        if (saved_frames_ % 30 == 0) {
             RKCAM_LOGI("[%s] saved_frames=%d, stream=%s, frame_id=%lld",
                        config_.stage_name.c_str(),
                        saved_frames_,
                        frame.stream_id.c_str(),
                        static_cast<long long>(frame.frame_id));
         }
-
-        if (config_.max_frames > 0 && saved_frames_ >= config_.max_frames) {
-            RKCAM_LOGI("[%s] reached max_frames=%d",
-                       config_.stage_name.c_str(),
-                       config_.max_frames);
-
-            running_ = false;
-
-            if (config_.stop_queue_when_done) {
-                input_queue_.stop();
-                        /*
-                * DMA 模式关键：
-                * 清掉队列里还没消费的 PipelineVideoFrame。
-                * 否则这些 frame 持有 VideoBuffer，release_cb 不触发，
-                * CaptureStage 等 dma_frames_in_flight_ 归零时会卡死。
-                */
-                input_queue_.clear();
-            }
-
-            break;
-        }
     }
+    RKCAM_LOGI("[%s] RawSaveStage thread exit, saved_frames=%d",
+            config_.stage_name.c_str(),
+            saved_frames_);
 }
 
 bool RawSaveStage::writeFrame(const PipelineVideoFrame& frame)
@@ -145,6 +145,15 @@ bool RawSaveStage::writeFrame(const PipelineVideoFrame& frame)
         RKCAM_LOGE("[%s] frame.buffer is null", config_.stage_name.c_str());
         return false;
     }
+    /*
+     * DmaBuffer 也可以保存，但前提是 plane.data != nullptr。
+     *
+     * 当前你的 CaptureStage 是 V4L2 MMAP + EXPBUF，
+     * 所以 DmaBuffer 里可以带 borrowed mmap data。
+     *
+     * 如果后面是纯 dma_fd，没有 CPU 映射地址，
+     * RawSaveStage 不能直接保存，需要先 RGA 转 CPU 或 mmap dma-buf。
+     */
     if (frame.buffer->memory_type != VideoMemoryType::Cpu &&
         frame.buffer->memory_type != VideoMemoryType::DmaBuffer) {
         RKCAM_LOGE("[%s] unsupported memory type=%d",

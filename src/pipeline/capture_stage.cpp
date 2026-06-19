@@ -37,7 +37,7 @@ bool CaptureStage::start()
         source_->close();
         return false;
     }
-
+    captured_frames_ = 0;
     running_ = true;
     thread_ = std::thread(&CaptureStage::threadLoop, this);
 
@@ -47,16 +47,14 @@ bool CaptureStage::start()
 void CaptureStage::stop()
 {
     running_ = false;
-    
+    output_queue_.stop(); //可以重复，保险起见
         /*
      * 尝试让 readFrame 尽快返回。
      * 如果 readFrame 内部正在 select/poll，stop 后也可能还要等一次超时，
      * 但通常 STREAMOFF 可以帮助采集链路停止。
      */
     
-    if (source_) {
-        source_->stop();
-    }
+
 
 
     if(thread_.joinable())
@@ -73,7 +71,13 @@ void CaptureStage::stop()
         });
     }
 
-    source_->close();
+    /*
+     * 所有 DMA frame 都归还后，再 STREAMOFF。
+     */
+    if (source_) {
+        source_->stop();
+        source_->close();
+    }
 
     RKCAM_LOGI("[%s] CaptureStage stopped", config_.stream_id.c_str());
 
@@ -120,8 +124,35 @@ void CaptureStage::threadLoop()
              */
             continue;
         }
+        ++captured_frames_;
+        if (captured_frames_ % 30 == 0 ||
+            (config_.max_frames > 0 && captured_frames_ == config_.max_frames)) {
+            RKCAM_LOGI("[%s] captured_frames=%d",
+                       config_.stream_id.c_str(),
+                       captured_frames_);
+        }
+
+        if (config_.max_frames > 0 &&
+            captured_frames_ >= config_.max_frames) {
+            RKCAM_LOGI("[%s] CaptureStage reached max_frames=%d",
+                       config_.stream_id.c_str(),
+                       config_.max_frames);
+
+            running_ = false;
+            break;
+        }
 
     }
+    /*
+     * 正常结束时发 EOF。
+     * 注意：这里只 stop，不 clear。
+     * 下游还要把队列里剩余帧处理完。
+     */
+    output_queue_.stop();
+
+    RKCAM_LOGI("[%s] CaptureStage thread exit, captured_frames=%d",
+               config_.stream_id.c_str(),
+               captured_frames_);
 
 }
 

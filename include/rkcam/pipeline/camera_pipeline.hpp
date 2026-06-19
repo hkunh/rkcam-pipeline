@@ -23,9 +23,11 @@ enum class CameraDebugStage {
 struct CameraPipelineConfig {
     std::string stream_id = "cam0";
 
-    V4L2VideoSourceConfig source;
+    // V4L2VideoSourceConfig source;
 
-    VideoMemoryType capture_output_memory_type = VideoMemoryType::Cpu;
+    // VideoMemoryType capture_output_memory_type = VideoMemoryType::Cpu;
+
+    CaptureStageConfig capture_stage_config;
 
 
     size_t raw_queue_capacity = 4;

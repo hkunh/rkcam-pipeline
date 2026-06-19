@@ -15,6 +15,11 @@ struct CaptureStageConfig{
     std::string stream_id = "cam0";
     V4L2VideoSourceConfig source;
     VideoMemoryType output_memory_type = VideoMemoryType::Cpu;
+    /*
+     * <= 0 表示无限采集。
+     * > 0 表示最多输出 max_frames 帧，然后停止 output_queue。
+     */
+    int max_frames = 0;
 };
 
 class CaptureStage : public IStage{
@@ -52,6 +57,8 @@ private:
     std::mutex dma_mutex_;
     std::condition_variable dma_cv_;
     size_t dma_frames_in_flight_ = 0;
+
+    int captured_frames_ = 0;
 };
 
 
