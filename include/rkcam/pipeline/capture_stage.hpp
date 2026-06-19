@@ -49,6 +49,9 @@ private:
 
     std::atomic<bool> running_{false};
 
+    std::mutex dma_mutex_;
+    std::condition_variable dma_cv_;
+    size_t dma_frames_in_flight_ = 0;
 };
 
 

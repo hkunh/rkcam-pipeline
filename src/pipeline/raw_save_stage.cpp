@@ -44,27 +44,21 @@ bool RawSaveStage::start()
 
 void RawSaveStage::stop()
 {
-    if(!running_)
-    {
-        closeFile();
-        return;
-    }
-    /*
-     * 唤醒阻塞在 pop() 的线程。
-     * 当前 RawSaveStage 是 raw_queue 的唯一消费者，所以这里可以 stop。
-     * 后面如果一个队列有多个消费者，建议由 Pipeline 统一 stop。
-     */
+    bool was_running = running_;
     running_ = false;
+
     input_queue_.stop();
 
-    if(thread_.joinable())
-    {
+    if (thread_.joinable()) {
         thread_.join();
     }
+
     closeFile();
+
     RKCAM_LOGI("[%s] RawSaveStage stopped, saved_frames=%d",
-               config_.stage_name.c_str(),
-               saved_frames_);
+                config_.stage_name.c_str(),
+                saved_frames_);
+
 
 }
 
@@ -144,9 +138,11 @@ bool RawSaveStage::writeFrame(const PipelineVideoFrame& frame)
         RKCAM_LOGE("[%s] frame.buffer is null", config_.stage_name.c_str());
         return false;
     }
-    if (frame.buffer->memory_type != VideoMemoryType::Cpu) {
-        RKCAM_LOGE("[%s] only Cpu memory is supported now",
-                   config_.stage_name.c_str());
+    if (frame.buffer->memory_type != VideoMemoryType::Cpu &&
+        frame.buffer->memory_type != VideoMemoryType::DmaBuffer) {
+        RKCAM_LOGE("[%s] unsupported memory type=%d",
+                   config_.stage_name.c_str(),
+                   static_cast<int>(frame.buffer->memory_type));
         return false;
     }
 

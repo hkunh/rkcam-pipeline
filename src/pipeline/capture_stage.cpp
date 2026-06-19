@@ -46,17 +46,14 @@ bool CaptureStage::start()
 }
 void CaptureStage::stop()
 {
-    if(!running_)
-    {
-        return;
-    }
     running_ = false;
-
+    
         /*
      * 尝试让 readFrame 尽快返回。
      * 如果 readFrame 内部正在 select/poll，stop 后也可能还要等一次超时，
      * 但通常 STREAMOFF 可以帮助采集链路停止。
      */
+    
     if (source_) {
         source_->stop();
     }
@@ -66,9 +63,19 @@ void CaptureStage::stop()
     {
         thread_.join();
     }
+
+
+    if(config_.output_memory_type == VideoMemoryType::DmaBuffer)
+    {
+        std::unique_lock<std::mutex> lock(dma_mutex_);
+        dma_cv_.wait(lock, [this](){
+            return dma_frames_in_flight_ == 0;
+        });
+    }
+
     source_->close();
 
-     RKCAM_LOGI("[%s] CaptureStage stopped", config_.stream_id.c_str());
+    RKCAM_LOGI("[%s] CaptureStage stopped", config_.stream_id.c_str());
 
 }
 
@@ -155,7 +162,8 @@ bool CaptureStage::handleCpuFrame(const VideoSourceFrame& src)
         if (output_queue_.stopped()) {
             running_ = false;
         }
-
+        RKCAM_LOGE("[%s] CaptureStage::handleCpuFrame output_queue_ stop",
+            config_.stream_id.c_str());
         return false;
     }
     return true;
@@ -164,34 +172,122 @@ bool CaptureStage::handleCpuFrame(const VideoSourceFrame& src)
 
 bool CaptureStage::handleDmaFrame(const VideoSourceFrame& src)
 {
-    /*
-     * 当前还没有实现 DMA/DMABUF 零拷贝。
-     *
-     * 后面实现时这里应该做：
-     *   1. V4L2VideoSource 支持导出 dma_fd，或者 VideoFrame 已经携带 dma_fd
-     *   2. 创建 PipelineVideoFrame
-     *   3. frame.buffer->memory_type = VideoMemoryType::DmaBuffer
-     *   4. frame.buffer->planes[p].dma_fd = ...
-     *   5. frame.buffer->release_cb 负责最终归还 V4L2 buffer
-     *
-     * 注意：
-     *   DMA 零拷贝模式不能像 CPU copy 一样马上 releaseFrame。
-     *   必须等后续 RGA / MPP 使用完后再归还。
-     */
+    if (src.width <= 0 || src.height <= 0) {
+        RKCAM_LOGE("[%s] CaptureStage handleDmaFrame invalid size: %dx%d",
+                   config_.stream_id.c_str(),
+                   src.width,
+                   src.height);
 
-    RKCAM_LOGE("[%s] CaptureStage DmaBuffer mode is not implemented yet",
-               config_.stream_id.c_str());
-
-    /*
-     * 当前未实现 DMA，所以必须立即归还这个 V4L2 buffer，
-     * 否则采几帧后 buffer 会耗尽。
-     */
-    if (!source_->releaseFrame(src)) {
-        RKCAM_LOGE("[%s] CaptureStage releaseFrame failed in DmaBuffer placeholder",
-                   config_.stream_id.c_str());
-        running_ = false;
+        source_->releaseFrame(src);
+        return false;
     }
 
-    return false;
+    if (src.format == PixelFormat::Unknown) {
+        RKCAM_LOGE("[%s] CaptureStage handleDmaFrame unknown pixel format",
+                   config_.stream_id.c_str());
+
+        source_->releaseFrame(src);
+        return false;
+    }
+
+    if (src.planes.empty()) {
+        RKCAM_LOGE("[%s] CaptureStage handleDmaFrame src.planes is empty",
+                   config_.stream_id.c_str());
+
+        source_->releaseFrame(src);
+        return false;
+    }
+
+
+    /*
+     * 这里要求 V4L2VideoSource 已经 export_dma_fd = true。
+     * 否则 dma_fd 会是 -1。
+     */
+    PipelineVideoFrame out_frame;
+    out_frame.stream_id = config_.stream_id;
+    out_frame.width = src.width;
+    out_frame.height = src.height;
+    out_frame.format = src.format;
+    out_frame.pts_us = src.pts_us;
+    out_frame.duration_us = src.duration_us;
+    out_frame.frame_id = src.frame_id;
+
+    auto buffer = std::make_shared<VideoBuffer>();
+    buffer->memory_type = VideoMemoryType::DmaBuffer;
+    buffer->planes.resize(src.planes.size());
+    for(size_t i = 0; i < src.planes.size(); i++)
+    {
+        const auto& sp = src.planes[i];
+        if(sp.dma_fd < 0)
+        {
+            RKCAM_LOGE("[%s] CaptureStage handleDmaFrame plane[%zu] invalid dma_fd=%d. "
+            "Did you set V4L2VideoSourceConfig::export_dma_fd=true?",
+            config_.stream_id.c_str(),
+            i,
+            sp.dma_fd);
+
+            source_->releaseFrame(src);
+            return false;
+        }
+        auto& dp = buffer->planes[i];
+        dp.data = static_cast<uint8_t*>(sp.data);  // 借用 V4L2 mmap 地址，仅在 release_cb 触发前有效
+        dp.cpu_storage.clear();
+
+        dp.dma_fd = sp.dma_fd;
+        dp.offset = 0;
+        dp.length = sp.length;
+        dp.bytesused = sp.bytesused;
+        dp.stride = sp.stride;
+    }
+    {
+        std::lock_guard<std::mutex> lock(dma_mutex_);
+        ++dma_frames_in_flight_;
+    }
+    /*
+     * 关键：
+     *   不能在 handleDmaFrame() 里马上 releaseFrame(src)。
+     *   要等 out_frame 被下游全部释放后，再由 release_cb 归还。
+     *
+     * 注意：
+     *   这里捕获 this 是第一版可用写法。
+     *   前提是 CaptureStage::stop() 会等待 dma_frames_in_flight_ 归零后再析构/close source。
+     */
+    buffer->release_cb = [this, src](){
+        bool release_ok = true;
+        if(source_){
+            release_ok = source_->releaseFrame(src);
+        }
+        else{
+            release_ok = false;
+        }
+        if (!release_ok) {
+            RKCAM_LOGE("[%s] CaptureStage DMA release_cb releaseFrame failed, frame_id=%lld buffer_index=%d",
+                       config_.stream_id.c_str(),
+                       static_cast<long long>(src.frame_id),
+                       src.buffer_index);
+        }
+        {
+            std::lock_guard<std::mutex> lock(dma_mutex_);
+            if(dma_frames_in_flight_ > 0)
+            {
+                --dma_frames_in_flight_;
+            }
+        }
+        dma_cv_.notify_all();
+    };
+    out_frame.buffer = buffer;
+
+    if(!output_queue_.push(std::move(out_frame)))
+    {
+        if (output_queue_.stopped()) {
+            running_ = false;
+
+        }
+        RKCAM_LOGE("[%s] CaptureStage::handleDmaFrame output_queue_ stop",
+            config_.stream_id.c_str());
+        return false;
+    }
+
+    return true;
 }
 }
