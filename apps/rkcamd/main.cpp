@@ -26,8 +26,10 @@ int main()
     config.source.height = 1080;
     config.source.pixel_format = "NV12";
     config.source.buffer_count = 4;
+    config.source.export_dma_fd = true;
 
-    config.capture_output_memory_type = rkcam::VideoMemoryType::Cpu;
+    // config.capture_output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
+    config.capture_output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
 
     config.raw_queue_capacity = 4;
     config.raw_queue_policy = rkcam::QueueFullPolicy::DropOldest;

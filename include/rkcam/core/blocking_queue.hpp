@@ -121,13 +121,18 @@ public:
         }
         not_full_cv_.notify_all();
     }
-    void clear()
-    {
+    void clear() {
+        std::deque<T> dropped; // 一个空局部变量
+
         {
-            std::lock_guard<std::mutex> lock(mutex_);
-            queue_.clear();
-        }
-        not_full_cv_.notify_all();
+            std::lock_guard<std::mutex> lock(mutex_); // 1. 加上队列锁
+            dropped.swap(queue_);                     // 2. 瞬间交换指针！queue_ 瞬间变空！
+        }                                             // 3. 离开这个花括号，锁立刻就解开了！
+
+        // 4. 此时锁已经解开了！
+        // dropped 作为局部变量，在这里离开函数作用域，自动触发析构，
+        // 在【锁的外面】慢慢去执行 release_cb 还给内核。
+        not_full_cv_.notify_all(); 
     }
     size_t size() const
     {

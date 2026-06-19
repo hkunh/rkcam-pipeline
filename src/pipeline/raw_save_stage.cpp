@@ -120,6 +120,13 @@ void RawSaveStage::threadLoop()
 
             if (config_.stop_queue_when_done) {
                 input_queue_.stop();
+                        /*
+                * DMA 模式关键：
+                * 清掉队列里还没消费的 PipelineVideoFrame。
+                * 否则这些 frame 持有 VideoBuffer，release_cb 不触发，
+                * CaptureStage 等 dma_frames_in_flight_ 归零时会卡死。
+                */
+                input_queue_.clear();
             }
 
             break;

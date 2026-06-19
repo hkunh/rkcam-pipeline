@@ -27,6 +27,7 @@ struct CameraPipelineConfig {
 
     VideoMemoryType capture_output_memory_type = VideoMemoryType::Cpu;
 
+
     size_t raw_queue_capacity = 4;
     QueueFullPolicy raw_queue_policy = QueueFullPolicy::DropOldest;
 

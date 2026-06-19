@@ -283,7 +283,7 @@ bool CaptureStage::handleDmaFrame(const VideoSourceFrame& src)
             running_ = false;
 
         }
-        RKCAM_LOGE("[%s] CaptureStage::handleDmaFrame output_queue_ stop",
+        RKCAM_LOGI("[%s] CaptureStage::handleDmaFrame output_queue_ stop",
             config_.stream_id.c_str());
         return false;
     }
