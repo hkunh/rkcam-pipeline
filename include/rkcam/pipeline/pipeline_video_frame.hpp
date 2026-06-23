@@ -16,6 +16,9 @@ enum class VideoMemoryType{
     Cpu,
     DmaBuffer,
 };
+struct NativeBufferHandle {
+    virtual ~NativeBufferHandle() = default;
+};
 struct VideoBufferPlane{
 
     /*
@@ -40,16 +43,43 @@ struct VideoBufferPlane{
     size_t offset = 0;
 
     /*
-     * 通用信息。
+     * length:
+     *   这个 memory plane 实际分配大小。
+     *
+     * bytesused:
+     *   当前有效使用大小。
+     *
+     * stride:
+     *   bytes per line。
+     *
+     * height_stride:
+     *   这个 memory plane 对应的实际分配行数。
+     *
+     * 对 NV12 single-plane：
+     *   stride = Y 行字节数
+     *   height_stride = Y 的对齐行数
+     *   UV 起始 = data + stride * height_stride
+     *
+     * 对 NV12M：
+     *   plane[0].height_stride = Y 对齐行数
+     *   plane[1].height_stride = UV 对齐行数
      */
     size_t length = 0;
     size_t bytesused = 0;
     int stride = 0;
+    int height_stride = 0;
 };
 struct VideoBuffer{
     VideoMemoryType memory_type = VideoMemoryType::Cpu;
 
     std::vector<VideoBufferPlane> planes;
+
+
+    /*
+     * 用于保存 MppBuffer / DRM handle / 其他平台 native handle。
+     * 上层普通 stage 不需要关心它。
+     */
+    std::shared_ptr<NativeBufferHandle> native_handle;
 
     /*
      * 可选释放回调。

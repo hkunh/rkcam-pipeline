@@ -19,6 +19,22 @@ add_library(rkcam::video_source ALIAS rkcam_video_source)
 
 
 
+# =========================
+# MPP
+# =========================
+set(MPP_LIB "$ENV{RK_SYSROOT}/usr/lib/librockchip_mpp.so")
+if(NOT EXISTS "${MPP_LIB}")
+    message(FATAL_ERROR "MPP library not found: ${MPP_LIB}")
+endif()
+
+add_library(mpp::mpp SHARED IMPORTED)
+set_target_properties(mpp::mpp PROPERTIES
+    IMPORTED_LOCATION "${MPP_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/video/mpp_rk3568"
+)
+
+
+
 add_library(rkcam_pipeline
     pipeline/pipeline.cpp
     pipeline/pipeline_video_frame.cpp
@@ -27,10 +43,12 @@ add_library(rkcam_pipeline
     pipeline/raw_save_stage.cpp
     pipeline/camera_pipeline.cpp
     pipeline/rga_stage.cpp
+    pipeline/mpp_buffer_pool.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
     rkcam::video_source
+    mpp::mpp
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
 
@@ -61,3 +79,5 @@ target_link_libraries(rkcam_rga_processor PUBLIC
     rga::rga
 )
 add_library(rkcam::rga_processor ALIAS rkcam_rga_processor)
+
+

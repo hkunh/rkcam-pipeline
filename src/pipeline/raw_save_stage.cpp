@@ -233,10 +233,14 @@ bool RawSaveStage::writeFrameTightNv12(const PipelineVideoFrame& frame)
                 return false;
             }
         }
+        /*
+         * 关键：
+         *   UV 起始不是 stride * height，
+         *   而是 stride * height_stride。
+         */
+        const int height_stride = p0.height_stride > 0 ? p0.height_stride : frame.height;
 
-        // UV: height/2 行，每行写 width 字节
-        const uint8_t* uv_base =
-            base + static_cast<size_t>(stride) * height;
+        const uint8_t* uv_base = base + static_cast<size_t>(stride) * height_stride;
 
         for (int y = 0; y < height / 2; ++y) {
             const uint8_t* row = uv_base + static_cast<size_t>(y) * stride;

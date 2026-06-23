@@ -46,6 +46,19 @@ bool RgaProcessor::process(
         request.output_memory_type == VideoMemoryType::Cpu) {
         return processDmaToCpu(input, output, request);
     }
+    if (input.buffer->memory_type == VideoMemoryType::DmaBuffer &&
+        request.output_memory_type == VideoMemoryType::DmaBuffer) {
+        /*
+         * DMA 输出必须由 RgaStage 提前准备 output.buffer。
+         */
+        if (!output.buffer ||
+            output.buffer->memory_type != VideoMemoryType::DmaBuffer) {
+            RKCAM_LOGE("RgaProcessor Dma->Dma requires preallocated output DmaBuffer");
+            return false;
+        }
+
+        return processDmaToDma(input, output, request);
+    }
 
     RKCAM_LOGE("RgaProcessor unsupported memory path: input_memory=%d output_memory=%d",
                static_cast<int>(input.buffer->memory_type),
@@ -113,8 +126,8 @@ bool RgaProcessor::processSinglePassDmaToCpu(
                    static_cast<int>(input.format));
         return false;
     }
-    const int src_rga_wstride = src_plane.stride;
-    const int src_rga_hstride = input.height;
+    const int src_rga_wstride = calcRgaWStrideFromPlaneStride(input.format, src_plane.stride);
+    const int src_rga_hstride = src_plane.height_stride > 0 ? src_plane.height_stride : input.height;
     if (src_rga_wstride <= 0) {
         RKCAM_LOGE("RgaProcessor invalid rga stride: src=%d",
                    src_rga_wstride);
@@ -243,8 +256,301 @@ bool RgaProcessor::processSinglePassDmaToCpu(
 
     return true;
 }
+int RgaProcessor::calcRgaWStrideFromPlaneStride(
+    PixelFormat format,
+    int plane_stride_bytes)
+{
+    if (plane_stride_bytes <= 0) {
+        return 0;
+    }
 
+    switch (format) {
+    case PixelFormat::NV12:
+        /*
+         * NV12:
+         *   Y 分量 1 pixel = 1 byte
+         *   所以 bytes stride == pixel stride
+         */
+        return plane_stride_bytes;
 
+    case PixelFormat::RGB888:
+    case PixelFormat::BGR888:
+        /*
+         * RGB888/BGR888:
+         *   1 pixel = 3 bytes
+         *   RGA wstride 传像素数
+         */
+        if (plane_stride_bytes % 3 != 0) {
+            RKCAM_LOGE("RgaProcessor invalid RGB stride bytes=%d, not divisible by 3",
+                       plane_stride_bytes);
+            return 0;
+        }
+
+        return plane_stride_bytes / 3;
+
+    default:
+        return 0;
+    }
+}
+bool RgaProcessor::processDmaToDma(
+    const PipelineVideoFrame& input,
+    PipelineVideoFrame& output,
+    const RgaProcessRequest& request)
+{
+    /*
+     * 1. 校验输入 DMA frame
+     */
+    if (!validateDmaInput(input)) {
+        return false;
+    }
+
+    /*
+     * 当前 RGA wrapbuffer_fd() 路径先只支持：
+     *   一帧一个 dma_fd
+     *
+     * 例如：
+     *   NV12: plane[0] = Y + UV
+     */
+    if (!validateSinglePlaneInput(input)) {
+        return false;
+    }
+
+    /*
+     * 2. 校验输出 DMA frame
+     *
+     * 注意：
+     *   output.buffer 必须由 RgaStage 从 DmaBufferPool 提前准备。
+     *   RgaProcessor 不申请 DMA buffer。
+     */
+    if (!output.buffer) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma failed: output.buffer is null");
+        return false;
+    }
+
+    if (output.buffer->memory_type != VideoMemoryType::DmaBuffer) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma failed: output is not DmaBuffer");
+        return false;
+    }
+
+    if (output.buffer->planes.size() != 1) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma only supports single-plane output now, planes=%zu",
+                   output.buffer->planes.size());
+        return false;
+    }
+    const auto& src_plane = input.buffer->planes[0];
+    auto& dst_plane = output.buffer->planes[0];
+
+    if (src_plane.dma_fd < 0 || dst_plane.dma_fd < 0) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma invalid fd: src_fd=%d dst_fd=%d",
+                   src_plane.dma_fd,
+                   dst_plane.dma_fd);
+        return false;
+    }
+
+    if (src_plane.stride <= 0 || dst_plane.stride <= 0) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma invalid stride: src_stride=%d dst_stride=%d",
+                   src_plane.stride,
+                   dst_plane.stride);
+        return false;
+    }
+
+    if (dst_plane.length == 0) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma dst length is 0");
+        return false;
+    }
+
+    const PixelFormat src_format = input.format;
+    PixelFormat dst_format = request.output_format;
+
+    const int src_rga_format = pixelFormatToRgaFormat(src_format);
+    const int dst_rga_format = pixelFormatToRgaFormat(dst_format);
+
+    RgaRect src_rect_rk {};
+    if (!makeSourceRect(input, request, src_rect_rk)) {
+        return false;
+    }
+    int dst_width = request.output_width > 0
+        ? request.output_width
+        : src_rect_rk.width;
+
+    int dst_height = request.output_height > 0
+        ? request.output_height
+        : src_rect_rk.height;
+
+    /*
+     * 如果旋转 90/270，且用户没显式设置输出尺寸，
+     * 默认交换宽高。
+     */
+    if ((request.rotate == RgaRotateMode::Rotate90 ||
+         request.rotate == RgaRotateMode::Rotate270) &&
+        request.output_width <= 0 &&
+        request.output_height <= 0) {
+        dst_width = src_rect_rk.height;
+        dst_height = src_rect_rk.width;
+    }
+
+    if (isYuv420Format(dst_format)) {
+        dst_width = alignEven(dst_width);
+        dst_height = alignEven(dst_height);
+    }
+
+    if (dst_width <= 0 || dst_height <= 0) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma invalid output size: %dx%d",
+                   dst_width,
+                   dst_height);
+        return false;
+    }
+    
+
+    /*
+     * output frame 通常已经由 RgaStage 填好了。
+     * 这里做一致性检查。
+     */
+    if (output.width != dst_width ||
+        output.height != dst_height ||
+        output.format != dst_format) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma output metadata mismatch: "
+                   "output=%dx%d fmt=%d, expected=%dx%d fmt=%d",
+                   output.width,
+                   output.height,
+                   static_cast<int>(output.format),
+                   dst_width,
+                   dst_height,
+                   static_cast<int>(dst_format));
+        return false;
+    }
+    /*
+     * 6. 检查输出 buffer 大小是否足够
+     *
+     * dst_plane.stride 是 bytes per line。
+     */
+    const size_t required_dst_size = calcPixelFormatSize(dst_format, dst_plane.stride, dst_height);
+    if (dst_plane.length < required_dst_size) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma dst buffer too small: length=%zu required=%zu",
+                   dst_plane.length,
+                   required_dst_size);
+        return false;
+    }
+    dst_plane.bytesused = required_dst_size;
+
+        /*
+     * 7. 计算 RGA wstride/hstride
+     *
+     * 注意：
+     *   VideoBufferPlane::stride 是 bytes per line。
+     *   RGA wstride 通常是 pixel stride。
+     */
+    const int src_rga_wstride =
+        calcRgaWStrideFromPlaneStride(src_format, src_plane.stride);
+
+    const int dst_rga_wstride =
+        calcRgaWStrideFromPlaneStride(dst_format, dst_plane.stride);
+
+    const int src_rga_hstride = src_plane.height_stride > 0 ? src_plane.height_stride : input.height;
+    const int dst_rga_hstride = dst_plane.height_stride > 0 ? dst_plane.height_stride : dst_height;
+
+    if (src_rga_wstride <= 0 || dst_rga_wstride <= 0) {
+        RKCAM_LOGE("RgaProcessor processDmaToDma invalid rga wstride: src=%d dst=%d",
+                   src_rga_wstride,
+                   dst_rga_wstride);
+        return false;
+    }
+
+    /*
+     * 8. 包装 RGA buffer
+     */
+    rga_buffer_t src_img = wrapbuffer_fd(
+        src_plane.dma_fd,
+        input.width,
+        input.height,
+        src_rga_format,
+        src_rga_wstride,
+        src_rga_hstride
+    );
+
+    rga_buffer_t  dst_img = wrapbuffer_fd(
+        dst_plane.dma_fd,
+        dst_width,
+        dst_height,
+        dst_rga_format,
+        dst_rga_wstride,
+        dst_rga_hstride
+    );
+
+    if(isYuv420Format(src_format) && isRgbFormat(dst_format))
+    {
+        dst_img.color_space_mode = IM_YUV_TO_RGB_BT601_LIMIT;
+    }
+    else if(isRgbFormat(src_format) && isYuv420Format(dst_format))
+    {
+        dst_img.color_space_mode = IM_RGB_TO_YUV_BT601_LIMIT;
+    }
+    else{
+        src_img.color_space_mode = IM_COLOR_SPACE_DEFAULT;
+        dst_img.color_space_mode = IM_COLOR_SPACE_DEFAULT;
+    }
+
+    /*
+     * 10. RGA rect
+     */
+    im_rect src_rect {};
+    src_rect.x = src_rect_rk.x;
+    src_rect.y = src_rect_rk.y;
+    src_rect.width = src_rect_rk.width;
+    src_rect.height = src_rect_rk.height;
+
+    im_rect dst_rect {};
+    dst_rect.x = 0;
+    dst_rect.y = 0;
+    dst_rect.width = dst_width;
+    dst_rect.height = dst_height;
+
+    rga_buffer_t pat {};
+    std::memset(&pat, 0, sizeof(pat));
+
+    im_rect pat_rect {};
+    std::memset(&pat_rect, 0, sizeof(pat_rect));
+
+    int usage = buildTransformUsage(request);
+    usage |= IM_SYNC;
+
+    /*
+     * 11. 执行 RGA
+     *
+     * src/dst format 不同 => convert
+     * src_rect/dst_rect 尺寸不同 => resize
+     * src_rect 非整图 => crop
+     * usage 中有 transform => flip/rotate
+     */
+    IM_STATUS status = improcess(
+        src_img,
+        dst_img,
+        pat,
+        src_rect,
+        dst_rect,
+        pat_rect,
+        usage);
+
+    if (status != IM_STATUS_SUCCESS) {
+        RKCAM_LOGE("RGA DmaToDma improcess failed: %s, usage=0x%x",
+                   imStrError(status),
+                   usage);
+        return false;
+    }
+
+    /*
+     * 12. 补全输出元信息
+     */
+    output.stream_id = input.stream_id;
+    output.width = dst_width;
+    output.height = dst_height;
+    output.format = dst_format;
+    output.pts_us = input.pts_us;
+    output.duration_us = input.duration_us;
+    output.frame_id = input.frame_id;
+
+    return true;
+}
 bool RgaProcessor::processFallbackDmaToCpu(
     const PipelineVideoFrame& input,
     PipelineVideoFrame& output,

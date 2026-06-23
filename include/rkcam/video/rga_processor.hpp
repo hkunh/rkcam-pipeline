@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rkcam/video/video_frame_processor.hpp"
+#include "rkcam/video/video_frame_processor.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -138,6 +139,16 @@ private:
         const PipelineVideoFrame& input,
         PipelineVideoFrame& output,
         const RgaProcessRequest& request);
+
+
+    bool processDmaToDma(const PipelineVideoFrame& input,
+        PipelineVideoFrame& output,
+        const RgaProcessRequest& request);
+    
+    static int calcRgaWStrideFromPlaneStride(
+        PixelFormat format,
+        int plane_stride_bytes
+    );
 
     /*
      * 后面再做：
