@@ -30,20 +30,19 @@ endif()
 add_library(mpp::mpp SHARED IMPORTED)
 set_target_properties(mpp::mpp PROPERTIES
     IMPORTED_LOCATION "${MPP_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/video/mpp_rk3568"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/mpp_rk3568"
 )
 
 
 
 add_library(rkcam_pipeline
-    pipeline/pipeline.cpp
-    pipeline/pipeline_video_frame.cpp
+    video/pipeline_video_frame.cpp
     pipeline/capture_stage.cpp
     pipeline/fps_stage.cpp
     pipeline/raw_save_stage.cpp
     pipeline/camera_pipeline.cpp
     pipeline/rga_stage.cpp
-    pipeline/mpp_buffer_pool.cpp
+    platform/rockchip/mpp_buffer_pool.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
@@ -64,11 +63,11 @@ endif()
 add_library(rga::rga SHARED IMPORTED)
 set_target_properties(rga::rga PROPERTIES
     IMPORTED_LOCATION "${RGA_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/video/rga_rk3568"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/rga_rk3568"
 )
 
 add_library(rkcam_rga_processor
-    video/rga_processor.cpp
+    platform/rockchip/rga_processor.cpp
 )
 target_include_directories(rkcam_rga_processor PUBLIC
     ${CMAKE_SOURCE_DIR}/include

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "rkcam/video/video_frame_processor.hpp"
-#include "rkcam/video/video_frame_processor.hpp"
 
 #include <cstddef>
 #include <cstdint>

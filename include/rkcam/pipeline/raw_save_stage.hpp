@@ -2,7 +2,7 @@
 
 #include "rkcam/core/blocking_queue.hpp"
 #include "rkcam/pipeline/pipeline_stage.hpp"
-#include "rkcam/pipeline/pipeline_video_frame.hpp"
+#include "rkcam/video/pipeline_video_frame.hpp"
 
 #include <atomic>
 #include <cstdio>

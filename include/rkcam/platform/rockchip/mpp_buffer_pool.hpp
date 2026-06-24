@@ -1,8 +1,8 @@
 #pragma once
 
-#include "rkcam/pipeline/video_buffer_pool.hpp"
+#include "rkcam/platform/rockchip/video_buffer_pool.hpp"
 
-#include "rkcam/video/mpp_rk3568/mpp_buffer.h"
+#include "rkcam/platform/rockchip/mpp_rk3568/mpp_buffer.h"
 
 #include <cstddef>
 #include <memory>

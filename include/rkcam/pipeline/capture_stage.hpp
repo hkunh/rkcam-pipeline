@@ -1,6 +1,6 @@
 #pragma once
 #include "rkcam/pipeline/pipeline_stage.hpp"
-#include "rkcam/pipeline/pipeline_video_frame.hpp"
+#include "rkcam/video/pipeline_video_frame.hpp"
 #include "rkcam/video/v4l2_video_source.hpp"
 #include "rkcam/core/blocking_queue.hpp"
 

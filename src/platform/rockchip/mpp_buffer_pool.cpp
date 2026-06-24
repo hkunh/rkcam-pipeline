@@ -1,4 +1,4 @@
-#include "rkcam/pipeline/mpp_buffer_pool.hpp"
+#include "rkcam/platform/rockchip/mpp_buffer_pool.hpp"
 #include "rkcam/core/log.hpp"
 
 #include <cstring>

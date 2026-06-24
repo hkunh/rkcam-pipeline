@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rkcam/pipeline/pipeline_video_frame.hpp"
+#include "rkcam/video/pipeline_video_frame.hpp"
 
 #include <memory>
 

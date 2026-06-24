@@ -1,8 +1,8 @@
-#include "rkcam/video/rga_processor.hpp"
+#include "rkcam/platform/rockchip/rga_processor.hpp"
 #include "rkcam/core/log.hpp"
-#include "rkcam/video/rga_rk3568/rga.h"
-#include "rkcam/video/rga_rk3568/im2d.h"
-#include "rkcam/video/rga_rk3568/RgaUtils.h"
+#include "rkcam/platform/rockchip/rga_rk3568/rga.h"
+#include "rkcam/platform/rockchip/rga_rk3568/im2d.h"
+#include "rkcam/platform/rockchip/rga_rk3568/RgaUtils.h"
 
 #include <cstring>
 #include <memory>

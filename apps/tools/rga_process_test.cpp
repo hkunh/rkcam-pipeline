@@ -1,7 +1,7 @@
 #include "rkcam/core/log.hpp"
 #include "rkcam/video/v4l2_video_source.hpp"
-#include "rkcam/video/rga_processor.hpp"
-#include "rkcam/pipeline/pipeline_video_frame.hpp"
+#include "rkcam/platform/rockchip/rga_processor.hpp"
+#include "rkcam/video/pipeline_video_frame.hpp"
 
 #include <cstdio>
 #include <cstdlib>
