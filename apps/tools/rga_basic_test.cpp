@@ -1,5 +1,5 @@
 #include "rkcam/core/log.hpp"
-#include "rkcam/platform/rockchip/rga_processor.hpp"
+#include "rkcam/platform/rockchip/rga/rga_processor.hpp"
 
 int main()
 {

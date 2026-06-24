@@ -17,6 +17,14 @@ target_link_libraries(rkcam_video_source PUBLIC
 )
 add_library(rkcam::video_source ALIAS rkcam_video_source)
 
+add_library(rkcam_video_frame
+    video/video_frame.cpp
+)
+target_link_libraries(rkcam_video_frame PUBLIC
+    rkcam::core
+)
+add_library(rkcam::video_frame ALIAS rkcam_video_frame)
+
 
 
 # =========================
@@ -30,26 +38,23 @@ endif()
 add_library(mpp::mpp SHARED IMPORTED)
 set_target_properties(mpp::mpp PROPERTIES
     IMPORTED_LOCATION "${MPP_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/mpp_rk3568"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/mpp/mpp_rk3568"
 )
 
-
-
-add_library(rkcam_pipeline
-    video/pipeline_video_frame.cpp
-    pipeline/capture_stage.cpp
-    pipeline/fps_stage.cpp
-    pipeline/raw_save_stage.cpp
-    pipeline/camera_pipeline.cpp
-    pipeline/rga_stage.cpp
-    platform/rockchip/mpp_buffer_pool.cpp
+add_library(rkcam_mpp_processor
+    platform/rockchip/mpp/mpp_buffer_pool.cpp
 )
-target_link_libraries(rkcam_pipeline PUBLIC
+target_include_directories(rkcam_mpp_processor PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(rkcam_mpp_processor PUBLIC
     rkcam::core
-    rkcam::video_source
+    rkcam::pipeline
     mpp::mpp
 )
-add_library(rkcam::pipeline ALIAS rkcam_pipeline)
+add_library(rkcam::mpp_processor ALIAS rkcam_mpp_processor)
+
+
 
 
 # =========================
@@ -63,11 +68,11 @@ endif()
 add_library(rga::rga SHARED IMPORTED)
 set_target_properties(rga::rga PROPERTIES
     IMPORTED_LOCATION "${RGA_LIB}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/rga_rk3568"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/include/rkcam/platform/rockchip/rga/rga_rk3568"
 )
 
 add_library(rkcam_rga_processor
-    platform/rockchip/rga_processor.cpp
+    platform/rockchip/rga/rga_processor.cpp
 )
 target_include_directories(rkcam_rga_processor PUBLIC
     ${CMAKE_SOURCE_DIR}/include
@@ -78,5 +83,21 @@ target_link_libraries(rkcam_rga_processor PUBLIC
     rga::rga
 )
 add_library(rkcam::rga_processor ALIAS rkcam_rga_processor)
+
+
+add_library(rkcam_pipeline
+    pipeline/capture_stage.cpp
+    pipeline/fps_stage.cpp
+    pipeline/raw_save_stage.cpp
+    pipeline/camera_pipeline.cpp
+    pipeline/rga_stage.cpp
+)
+target_link_libraries(rkcam_pipeline PUBLIC
+    rkcam::core
+    rkcam::video_frame
+    rkcam::video_source
+    rkcam::mpp_processor
+)
+add_library(rkcam::pipeline ALIAS rkcam_pipeline)
 
 

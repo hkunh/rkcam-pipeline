@@ -1,6 +1,6 @@
 
 #pragma once
-#include "rkcam/video/video_source_frame.hpp"
+#include "rkcam/video/video_source.hpp"
 
 #include <cstdint>
 #include <cstddef>

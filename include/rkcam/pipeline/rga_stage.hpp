@@ -1,10 +1,10 @@
 #pragma once
 
 #include "rkcam/pipeline/pipeline_stage.hpp"
-#include "rkcam/video/pipeline_video_frame.hpp"
-#include "rkcam/platform/rockchip/rga_processor.hpp"
+#include "rkcam/video/video_frame.hpp"
+#include "rkcam/platform/rockchip/rga/rga_processor.hpp"
 #include "rkcam/core/blocking_queue.hpp"
-#include "rkcam/platform/rockchip/mpp_buffer_pool.hpp"
+#include "rkcam/platform/rockchip/mpp/mpp_buffer_pool.hpp"
 
 #include <atomic>
 #include <string>
