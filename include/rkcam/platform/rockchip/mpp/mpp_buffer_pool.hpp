@@ -18,7 +18,7 @@ struct MppBufferPoolConfig {
     int height = 0;
 
     /*
-     * 0 表示自动对齐。
+     * 0 表示自动对齐。表示每行像素数
      */
     int hor_stride = 0;
     int ver_stride = 0;

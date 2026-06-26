@@ -43,6 +43,7 @@ set_target_properties(mpp::mpp PROPERTIES
 
 add_library(rkcam_mpp_processor
     platform/rockchip/mpp/mpp_buffer_pool.cpp
+    platform/rockchip/mpp/mpp_encoder.cpp
 )
 target_include_directories(rkcam_mpp_processor PUBLIC
     ${CMAKE_SOURCE_DIR}/include

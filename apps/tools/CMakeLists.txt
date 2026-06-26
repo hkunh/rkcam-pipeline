@@ -31,3 +31,14 @@ target_link_libraries(rga_process_test PRIVATE
     rkcam::pipeline
     rkcam::rga_processor
 )
+
+
+add_executable(mpp_encoder_test
+    mpp_encoder_test.cpp
+)
+target_link_libraries(mpp_encoder_test PRIVATE
+    rkcam::core
+    rkcam::video_source
+    rkcam::rga_processor
+    rkcam::mpp_processor
+)

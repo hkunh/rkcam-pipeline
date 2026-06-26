@@ -44,6 +44,11 @@ $Files = @(
         LocalPath = Join-Path $BuildDir "apps\tools\rga_process_test"
         RemotePath = "/userdata/rkcam/bin/rga_process_test"
     }
+    @{
+        Name = "mpp_encoder_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\mpp_encoder_test"
+        RemotePath = "/userdata/rkcam/bin/mpp_encoder_test"
+    }
 )
 
 Write-Host "Project root: $RootDir"

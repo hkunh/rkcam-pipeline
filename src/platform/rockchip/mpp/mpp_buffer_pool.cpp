@@ -334,14 +334,21 @@ size_t MppBufferPool::calcFrameSize(
 
     switch (format) {
     case PixelFormat::NV12:
-        return static_cast<size_t>(hor_stride) *
-               static_cast<size_t>(ver_stride) *
+        /*
+         * RK MPP 编码输入 buffer size 通常按 64 对齐计算。
+         *
+         * 注意：
+         *   hor_stride / ver_stride 仍然传 640 / 368；
+         *   只是底层 buffer size 要留到 align64(ver_stride)=384。
+         */
+        return static_cast<size_t>(alignTo(hor_stride, 64)) *
+               static_cast<size_t>(alignTo(ver_stride, 64)) *
                3 / 2;
 
     case PixelFormat::RGB888:
     case PixelFormat::BGR888:
-        return static_cast<size_t>(hor_stride) *
-               static_cast<size_t>(ver_stride) *
+        return static_cast<size_t>(alignTo(hor_stride, 64)) *
+               static_cast<size_t>(alignTo(ver_stride, 64)) *
                3;
 
     default:

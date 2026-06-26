@@ -1,3 +1,4 @@
+#pragma once
 namespace rkcam{
 
 enum class PixelFormat {
