@@ -42,9 +42,8 @@ bool RgaStage::start()
 }
 void RgaStage::stop()
 {
-    running_ = false;
+    
     /*
-     * 强制退出时唤醒阻塞在 input_queue_.pop() 的线程。
      *
      * 正常 EOF 路径下，CaptureStage 已经 stop raw_queue。
      * 这里重复 stop 是安全的。
@@ -68,6 +67,8 @@ void RgaStage::stop()
      *   所以下游还持有 DMA buffer 时，pool 不会提前析构。
      */
     output_pool_.reset();
+
+    running_ = false;
     RKCAM_LOGI("[%s] RgaStage stopped, processed_frames=%d",
             config_.stage_name.c_str(),
             processed_frames_);
@@ -183,7 +184,7 @@ bool RgaStage::prepareOutputFrame(
 
 void RgaStage::threadLoop()
 {
-    while(running_)
+    while(true)
     {
         PipelineVideoFrame input;
         if(!input_queue_.pop(input))
@@ -235,7 +236,7 @@ void RgaStage::threadLoop()
      * 退出时必须 stop 输出队列，通知 RawSaveStage EOF。
      */
     output_queue_.stop();
-
+    running_ = false;
     RKCAM_LOGI("[%s] RgaStage thread exit, processed_frames=%d",
                config_.stage_name.c_str(),
                processed_frames_);

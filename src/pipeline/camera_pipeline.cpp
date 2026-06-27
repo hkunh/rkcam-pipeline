@@ -1,18 +1,13 @@
 #include "rkcam/pipeline/camera_pipeline.hpp"
 #include "rkcam/core/log.hpp"
+#include "rkcam/video/v4l2_video_source.hpp"
 
-#include <chrono>
 #include <memory>
-#include <thread>
 #include <utility>
 
 namespace rkcam {
-
 CameraPipeline::CameraPipeline(const CameraPipelineConfig& config)
-    : config_(config),
-      raw_frame_queue_(config.raw_queue_capacity, config.raw_queue_policy),
-      processed_frame_queue_(config.processed_queue_capacity,
-                             config.processed_queue_policy)
+    : config_(config)
 {
 }
 
@@ -20,33 +15,26 @@ CameraPipeline::~CameraPipeline()
 {
     stop();
 }
-
 bool CameraPipeline::start()
 {
-    if (running_) {
+    if(running_)
+    {
         return true;
     }
-
-    /*
-     * 支持 stop 后再次 start。
-     */
-    raw_frame_queue_.reset();
-    processed_frame_queue_.reset();
-
-    if (!createStages()) {
-        RKCAM_LOGE("[%s] CameraPipeline createStages failed",
-                   config_.stream_id.c_str());
-        destroyStages();
+    if(!initStageNodes())
+    {
+        RKCAM_LOGE("[%s] initStageNodes failed",
+            config_.stream_id.c_str());
+        destroy();
         return false;
     }
-
-    if (!startStages()) {
-        RKCAM_LOGE("[%s] CameraPipeline startStages failed",
-                   config_.stream_id.c_str());
+    if(!startStages())
+    {
+        RKCAM_LOGE("[%s] startStages failed",
+            config_.stream_id.c_str());
         stop();
         return false;
     }
-
     running_ = true;
 
     RKCAM_LOGI("[%s] CameraPipeline started",
@@ -57,55 +45,20 @@ bool CameraPipeline::start()
 
 void CameraPipeline::stop()
 {
-    if (!running_ &&
-        !capture_stage_ &&
-        !rga_stage_ &&
-        !debug_stage_) {
+    if (!running_ && nodes_.empty() && queue_map_.empty()) {
         return;
     }
 
     running_ = false;
 
     /*
-     * 停止顺序：
-     *
-     * 1. 先停 CaptureStage。
-     *    CaptureStage 会 stop raw_frame_queue_，告诉 RgaStage 不会再有新帧。
-     *
-     * 2. 再停 RgaStage。
-     *    RgaStage 应该处理完 raw_frame_queue_ 残留帧，
-     *    然后 stop processed_frame_queue_。
-     *
-     * 3. 最后停 DebugStage。
-     *    RawSaveStage/FpsStage 会消费 processed_frame_queue_，
-     *    直到 queue stopped 且 empty。
+     * 停 stage，再停 queue，再清理残留 frame。
      */
-    if (capture_stage_) {
-        capture_stage_->stop();
-        capture_stage_.reset();
-    }
+    stopStages();
+    stopAllQueues();
+    clearAllQueues();
 
-    raw_frame_queue_.stop();
-
-    if (rga_stage_) {
-        rga_stage_->stop();
-        rga_stage_.reset();
-    }
-
-    processed_frame_queue_.stop();
-
-    if (debug_stage_) {
-        debug_stage_->stop();
-        debug_stage_.reset();
-    }
-
-    /*
-     * 强制清理残留 frame。
-     * 正常 EOF 流程中一般已经为空。
-     * 这里主要用于异常 stop，避免 DmaBuffer 残留导致 release_cb 不触发。
-     */
-    raw_frame_queue_.clear();
-    processed_frame_queue_.clear();
+    destroy();
 
     RKCAM_LOGI("[%s] CameraPipeline stopped",
                config_.stream_id.c_str());
@@ -113,198 +66,322 @@ void CameraPipeline::stop()
 
 bool CameraPipeline::isRunning() const
 {
+    if(!running_)
+    {
+        return true;
+    }
     /*
-     * 现在不能再只看 raw_frame_queue_。
-     *
-     * CaptureStage 达到 max_frames 后，raw_frame_queue_ 会 stopped，
-     * 但 RgaStage / RawSaveStage 可能还在处理剩余帧。
-     *
-     * 这里给一个简单判断：
-     *   两个队列都 stopped 且都 empty，认为 pipeline 已经自然结束。
-     */
-    const bool all_queues_done =
-        raw_frame_queue_.stopped() &&
-        processed_frame_queue_.stopped() &&
-        raw_frame_queue_.size() == 0 &&
-        processed_frame_queue_.size() == 0;
-
-    return running_ && !all_queues_done;
+    * 所有队列 stopped 且 empty，则认为自然结束。
+    */
+    bool all_done = true;
+    for(const auto& kv : queue_map_){
+        const auto& queue = kv.second;
+        if(!queue)
+        {
+            continue;
+        }
+        if(!queue->stopped() || queue->size() != 0)
+        {
+            all_done = false;
+            break;
+        }
+    }
+    return !all_done;
 }
 
-bool CameraPipeline::createStages()
+bool CameraPipeline::initStageNodes(){
+    nodes_.clear();
+    queue_map_.clear();
+
+    /*
+    * 先把配置拷贝成运行时 StageNode。
+    */
+    for(const auto& cfg : config_.nodes){
+        StageNode node;
+        node.config = cfg;
+        nodes_.push_back(std::move(node));
+    }
+
+    if(!initStageNodeQueues())
+    {
+        return false;
+    }
+    if(!initStageNodeStages())
+    {
+        return false;
+    }
+    return true;
+
+}
+bool CameraPipeline::initStageNodeQueues()
 {
-    /*
-     * 当前先写死：
-     *   CaptureStage -> RgaStage -> DebugStage
-     */
-
-    CaptureStageConfig capture_config = config_.capture_stage_config;
-
-    /*
-     * 当前 RGA 输入需要 DmaBuffer。
-     * 所以这里强制打开 dma_fd 导出。
-     */
-    capture_config.output_memory_type = VideoMemoryType::DmaBuffer;
-    capture_config.source.export_dma_fd = true;
-
-    auto source = std::make_unique<V4L2VideoSource>(
-        capture_config.source);
-
-    capture_stage_ = std::make_unique<CaptureStage>(
-        capture_config,
-        std::move(source),
-        raw_frame_queue_);
-
-    /*
-     * RgaStage:
-     *   input : raw_frame_queue_
-     *   output: processed_frame_queue_
-     */
-    RgaStageConfig rga_config = config_.rga_stage_config;
-    if (rga_config.stage_name.empty()) {
-        rga_config.stage_name = "rga";
-    }
-
-    rga_stage_ = std::make_unique<RgaStage>(
-        rga_config,
-        raw_frame_queue_,
-        processed_frame_queue_);
-
-    /*
-     * DebugStage 现在消费 RGA 输出后的 processed_frame_queue_。
-     */
-    switch (config_.debug_stage) {
-    case CameraDebugStage::None:
-        debug_stage_.reset();
-        break;
-
-    case CameraDebugStage::Fps: {
-        FpsStageConfig fps_config = config_.fps;
-        if (fps_config.stage_name.empty()) {
-            fps_config.stage_name = "fps";
+    for(auto& node : nodes_)
+    {
+        /*
+        * 初始化 input queue。
+        * Capture 这类 source stage 可以没有 input queue。
+        */
+        if(node.config.input_queue.valid())
+        {
+            if(!createOrReuseQueue(node.config.input_queue, node.input_queue)){
+                RKCAM_LOGE("[%s] create input queue failed, stage=%s queue=%s",
+                           config_.stream_id.c_str(),
+                           node.config.name.c_str(),
+                           node.config.input_queue.name.c_str());
+                return false;
+            }
         }
 
-        debug_stage_ = std::make_unique<FpsStage>(
-            fps_config,
-            processed_frame_queue_);
-        break;
-    }
-
-    case CameraDebugStage::RawSave: {
-        RawSaveStageConfig save_config = config_.raw_save;
-        if (save_config.stage_name.empty()) {
-            save_config.stage_name = "raw_save";
+        /*
+        * 初始化 output queue。
+        * RawSave / Fps 这类 sink stage 可以没有 output queue。
+        */
+        if(node.config.output_queue.valid())
+        {
+            if(!createOrReuseQueue(node.config.output_queue, node.output_queue)){
+                RKCAM_LOGE("[%s] create output queue failed, stage=%s queue=%s",
+                           config_.stream_id.c_str(),
+                           node.config.name.c_str(),
+                           node.config.output_queue.name.c_str());
+                return false;
+            }
         }
 
-        debug_stage_ = std::make_unique<RawSaveStage>(
-            save_config,
-            processed_frame_queue_);
-        break;
+    }
+    return true;
+}
+
+bool CameraPipeline::createOrReuseQueue(
+    const PipelineQueueConfig& config,
+    std::shared_ptr<BlockingQueue<PipelineVideoFrame>>& queue)
+{
+    if (!config.valid()) {
+        queue.reset();
+        return true;
     }
 
-    default:
-        RKCAM_LOGE("[%s] unsupported debug stage",
+    auto it = queue_map_.find(config.name);
+    if(it != queue_map_.end())
+    {
+        /*
+        * 已存在同名队列，直接复用。
+        * 这样前一个 node 的 output_queue_ 和后一个 node 的 input_queue_
+        * 会指向同一个 BlockingQueue。
+        */
+        queue = it -> second;
+        return true;
+    }
+    auto q = std::make_shared<BlockingQueue<PipelineVideoFrame>>(config.capacity, config.policy);
+    queue = q;
+    queue_map_.emplace(config.name, std::move(q));
+    RKCAM_LOGI("[%s] create queue: %s capacity=%zu",
+            config_.stream_id.c_str(),
+            config.name.c_str(),
+            config.capacity);
+
+    return true;
+}   
+bool CameraPipeline::initStageNodeStages()
+{
+    for(auto& node : nodes_)
+    {
+        if(!createStageForNode(node))
+        {
+            RKCAM_LOGE("[%s] create stage failed: %s",
+                       config_.stream_id.c_str(),
+                       node.config.name.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+bool CameraPipeline::createStageForNode(StageNode& node)
+{
+    if (node.config.name.empty()) {
+        RKCAM_LOGE("[%s] stage name is empty",
                    config_.stream_id.c_str());
         return false;
     }
+    switch(node.config.type){
+        case StageType::Capture:{
+            if(!node.output_queue)
+            {
+                RKCAM_LOGE("[%s] CaptureStage %s requires output_queue",
+                       config_.stream_id.c_str(),
+                       node.config.name.c_str());
+                return false;
+            }
+            CaptureStageConfig capture_cfg = node.config.capture;
+            if (capture_cfg.stream_id.empty()) {
+                capture_cfg.stream_id = config_.stream_id;
+            }
+            std::unique_ptr<IVideoSource> source =std::make_unique<V4L2VideoSource>(capture_cfg.source);
+            node.stage = std::make_unique<CaptureStage>(capture_cfg, std::move(source), *node.output_queue);
+            RKCAM_LOGI("[%s] create CaptureStage: %s -> %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.output_queue.name.c_str());
 
-    return true;
+            return true;
+            
+        }
+        case StageType::Rga:{
+            if(!node.input_queue || !node.output_queue)
+            {
+                 RKCAM_LOGE("[%s] RgaStage %s requires input_queue and output_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+            RgaStageConfig rga_cfg = node.config.rga;
+            if (rga_cfg.stage_name.empty()) {
+                rga_cfg.stage_name = node.config.name;
+            }
+            node.stage = std::make_unique<RgaStage>(
+                rga_cfg,
+                *node.input_queue,
+                *node.output_queue);
+            RKCAM_LOGI("[%s] create RgaStage: %s %s -> %s",
+                   config_.stream_id.c_str(),
+                   node.config.name.c_str(),
+                   node.config.input_queue.name.c_str(),
+                   node.config.output_queue.name.c_str());
+
+            return true;
+        }
+        case StageType::Fps: {
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] FpsStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            FpsStageConfig fps_cfg = node.config.fps;
+
+            if (fps_cfg.stage_name.empty()) {
+                fps_cfg.stage_name = node.config.name;
+            }
+
+            node.stage = std::make_unique<FpsStage>(
+                fps_cfg,
+                *node.input_queue);
+
+            RKCAM_LOGI("[%s] create FpsStage: %s <- %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str());
+
+            return true;
+        }
+        case StageType::RawSave: {
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] RawSaveStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            RawSaveStageConfig save_cfg = node.config.raw_save;
+
+            if (save_cfg.stage_name.empty()) {
+                save_cfg.stage_name = node.config.name;
+            }
+
+            node.stage = std::make_unique<RawSaveStage>(
+                save_cfg,
+                *node.input_queue);
+
+            RKCAM_LOGI("[%s] create RawSaveStage: %s <- %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str());
+
+            return true;
+        }
+        default:
+            RKCAM_LOGE("[%s] unsupported stage type, stage=%s",
+                   config_.stream_id.c_str(),
+                   node.config.name.c_str());
+            return false;
+    }
+
 }
 
 bool CameraPipeline::startStages()
 {
     /*
-     * 启动顺序：
-     *   下游先启动，上游后启动。
-     *
-     * RawSave/Fps -> RGA -> Capture
+     * nodes_ 按 上游 -> 下游 配置。
+     * 启动时反过来：下游先启动，上游后启动。
      */
-
-    if (debug_stage_) {
-        if (!debug_stage_->start()) {
-            RKCAM_LOGE("[%s] debug stage start failed",
-                       config_.stream_id.c_str());
+     for(auto it = nodes_.rbegin(); it != nodes_.rend(); it++){
+        if(!it->stage)
+        {
+            RKCAM_LOGE("[%s] stage is null: %s",
+                       config_.stream_id.c_str(),
+                       it->config.name.c_str());
             return false;
         }
-    }
-
-    if (!rga_stage_) {
-        RKCAM_LOGE("[%s] rga_stage_ is null",
-                   config_.stream_id.c_str());
-        return false;
-    }
-
-    if (!rga_stage_->start()) {
-        RKCAM_LOGE("[%s] RgaStage start failed",
-                   config_.stream_id.c_str());
-
-        if (debug_stage_) {
-            debug_stage_->stop();
+        if(!it->stage->start())
+        {
+            RKCAM_LOGE("[%s] stage start failed: %s",
+                       config_.stream_id.c_str(),
+                       it->config.name.c_str());
+            return false;
         }
-
-        processed_frame_queue_.stop();
-        return false;
-    }
-
-    if (!capture_stage_) {
-        RKCAM_LOGE("[%s] capture_stage_ is null",
-                   config_.stream_id.c_str());
-
-        if (rga_stage_) {
-            rga_stage_->stop();
-        }
-
-        if (debug_stage_) {
-            debug_stage_->stop();
-        }
-
-        return false;
-    }
-
-    if (!capture_stage_->start()) {
-        RKCAM_LOGE("[%s] CaptureStage start failed",
-                   config_.stream_id.c_str());
-
-        if (rga_stage_) {
-            rga_stage_->stop();
-        }
-
-        if (debug_stage_) {
-            debug_stage_->stop();
-        }
-
-        raw_frame_queue_.stop();
-        processed_frame_queue_.stop();
-
-        return false;
-    }
-
-    return true;
+     }
+     return true;
 }
 
-void CameraPipeline::destroyStages()
+void CameraPipeline::stopStages()
 {
-    if (capture_stage_) {
-        capture_stage_->stop();
-        capture_stage_.reset();
+    for(auto& node : nodes_)
+    {
+        if(node.stage)
+        {
+            if(node.stage)
+            {
+                node.stage->stop();
+            }
+        }
     }
-
-    raw_frame_queue_.stop();
-
-    if (rga_stage_) {
-        rga_stage_->stop();
-        rga_stage_.reset();
-    }
-
-    processed_frame_queue_.stop();
-
-    if (debug_stage_) {
-        debug_stage_->stop();
-        debug_stage_.reset();
-    }
-
-    raw_frame_queue_.clear();
-    processed_frame_queue_.clear();
 }
+
+void CameraPipeline::stopAllQueues()
+{
+    for(auto& kv : queue_map_)
+    {
+        if(kv.second)
+        {
+            kv.second->stop();
+        }
+    }
+}
+
+void CameraPipeline::clearAllQueues(){
+    for(auto& kv : queue_map_)
+    {
+        if (kv.second) {
+            kv.second->clear();
+        }
+    }
+}
+
+void CameraPipeline::destroy(){
+    for(auto& node : nodes_)
+    {
+        if(node.stage){
+            node.stage->stop();
+            node.stage.reset();
+        }
+        node.input_queue.reset();
+        node.output_queue.reset();
+    }
+    nodes_.clear();
+    clearAllQueues();
+    queue_map_.clear();
+}
+
+
 
 } // namespace rkcam

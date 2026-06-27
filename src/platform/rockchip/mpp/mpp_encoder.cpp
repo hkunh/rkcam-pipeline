@@ -381,11 +381,14 @@ bool MppEncoder::encode(
         return false;
     }
 
-    MppPacket mpp_packet = nullptr;
-    MPP_RET ret = mpi_->encode(ctx_, mpp_frame, &mpp_packet);
     /*
-     * mpp_frame 只是 MppFrame wrapper。
-     * 真正的 MppBuffer 生命周期由 PipelineVideoFrame::buffer 持有。
+     * 1. 先送入一帧。
+     */
+    MPP_RET ret = mpi_->encode_put_frame(ctx_, mpp_frame);
+
+    /*
+     * mpp_frame 只是 wrapper。
+     * 真正的 MppBuffer 由 PipelineVideoFrame::buffer 持有。
      */
     if (mpp_frame) {
         mpp_frame_deinit(&mpp_frame);
@@ -393,16 +396,11 @@ bool MppEncoder::encode(
     }
 
     if (ret != MPP_OK) {
-        RKCAM_LOGE("MppEncoder encode failed: mpi->encode ret=%d", ret);
+        RKCAM_LOGE("MppEncoder encode_put_frame failed, ret=%d frame_id=%lld",
+                   ret,
+                   static_cast<long long>(frame.frame_id));
         return false;
     }
-
-    if (!mpp_packet) {
-        RKCAM_LOGE("MppEncoder encode failed: output packet is null");
-        return false;
-    }
-
-
 
     /*
      * 2. 再主动取包。

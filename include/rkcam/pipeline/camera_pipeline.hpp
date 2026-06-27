@@ -1,65 +1,84 @@
 #pragma once
 
 #include "rkcam/core/blocking_queue.hpp"
+
 #include "rkcam/pipeline/capture_stage.hpp"
 #include "rkcam/pipeline/fps_stage.hpp"
 #include "rkcam/pipeline/raw_save_stage.hpp"
 #include "rkcam/pipeline/rga_stage.hpp"
 #include "rkcam/pipeline/pipeline_stage.hpp"
+
 #include "rkcam/video/video_frame.hpp"
-#include "rkcam/video/v4l2_video_source.hpp"
 
 #include <atomic>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace rkcam {
 
-enum class CameraDebugStage {
-    None,
+enum class StageType {
+    Capture,
+    Rga,
     Fps,
     RawSave,
 };
 
-struct CameraPipelineConfig {
-    std::string stream_id = "cam0";
+struct PipelineQueueConfig{
+    std::string name;
+    size_t capacity = 4;
+    QueueFullPolicy policy = QueueFullPolicy::DropOldest;
+    bool valid() const
+    {
+        return !name.empty();
+    }
+};
+struct StageNodeConfig{
+    std::string name;
+    StageType type = StageType::Capture;
 
     /*
-     * CaptureStage:
-     *   当前建议输出 DmaBuffer。
-     *   max_frames 也放在 capture_stage_config 里。
+     * input_queue:
+     *   Capture 这种 source stage 可以为空。
+     *
+     * output_queue:
+     *   RawSave / Fps 这种 sink stage 可以为空。
      */
-    CaptureStageConfig capture_stage_config;
+    PipelineQueueConfig input_queue;
+    PipelineQueueConfig output_queue;
 
     /*
-     * RgaStage:
-     *   当前写死插在 CaptureStage 和 DebugStage 之间。
-     */
-    RgaStageConfig rga_stage_config;
-
-    /*
-     * Capture -> RGA 的队列。
-     */
-    size_t raw_queue_capacity = 4;
-    QueueFullPolicy raw_queue_policy = QueueFullPolicy::DropOldest;
-
-    /*
-     * RGA -> RawSave/Fps 的队列。
-     */
-    size_t processed_queue_capacity = 4;
-    QueueFullPolicy processed_queue_policy = QueueFullPolicy::DropOldest;
-
-    /*
-     * 当前 debug_stage 消费的是 RGA 输出后的 processed_frame_queue_。
-     */
-    CameraDebugStage debug_stage = CameraDebugStage::RawSave;
-
+    * 每个 stage 自己的配置。
+    * 第一版不用 std::variant，简单直接。
+    */
+    CaptureStageConfig capture;
+    RgaStageConfig rga;
     FpsStageConfig fps;
     RawSaveStageConfig raw_save;
+
 };
 
-class CameraPipeline {
-public:
+struct StageNode{
+    StageNodeConfig config;
+
+    std::shared_ptr<BlockingQueue<PipelineVideoFrame>> input_queue;
+    std::unique_ptr<IStage> stage;
+    std::shared_ptr<BlockingQueue<PipelineVideoFrame>> output_queue;
+};
+
+struct CameraPipelineConfig {
+    std::string stream_id = "cam0";
+    /*
+     * 按 上游 -> 下游 顺序填写。
+     *
+     * 例如：
+     *   capture -> rga -> raw_save
+     */
+    std::vector<StageNodeConfig> nodes;
+};
+class CameraPipeline{
+public: 
     explicit CameraPipeline(const CameraPipelineConfig& config);
     ~CameraPipeline();
 
@@ -70,36 +89,39 @@ public:
     void stop();
 
     bool isRunning() const;
-
 private:
-    bool createStages();
+    bool initStageNodes();
+    bool initStageNodeQueues();
+    bool initStageNodeStages();
+
+    bool createOrReuseQueue(const PipelineQueueConfig& config, std::shared_ptr<BlockingQueue<PipelineVideoFrame>>& queue);
+
+    bool createStageForNode(StageNode& node);
+
     bool startStages();
-    void destroyStages();
+    void stopStages();
+
+    void stopAllQueues();
+    void clearAllQueues();
+
+    void destroy();
 
 private:
     CameraPipelineConfig config_;
 
     /*
-     * CaptureStage -> RgaStage
+     * 所有队列按 name 统一管理。
+     * StageNode 里的 input_queue / output_queue 只是 shared_ptr 引用。
      */
-    BlockingQueue<PipelineVideoFrame> raw_frame_queue_;
-
+     std::unordered_map<std::string, std::shared_ptr<BlockingQueue<PipelineVideoFrame>>> queue_map_;
+     
     /*
-     * RgaStage -> RawSaveStage / FpsStage
-     */
-    BlockingQueue<PipelineVideoFrame> processed_frame_queue_;
-
-    std::unique_ptr<CaptureStage> capture_stage_;
-    std::unique_ptr<RgaStage> rga_stage_;
-
-    /*
-     * 当前 debug_stage_ 可以是：
-     *   FpsStage
-     *   RawSaveStage
-     *
-     * 注意：它消费 processed_frame_queue_。
-     */
-    std::unique_ptr<IStage> debug_stage_;
+    * 每个节点包含：
+    *   input queue config + input queue
+    *   stage
+    *   output queue config + output queue
+    */
+    std::vector<StageNode> nodes_;
 
     std::atomic<bool> running_{false};
 };

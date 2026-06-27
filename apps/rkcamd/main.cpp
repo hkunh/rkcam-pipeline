@@ -1,7 +1,6 @@
 #include "rkcam/core/log.hpp"
 #include "rkcam/pipeline/camera_pipeline.hpp"
 
-
 #include <chrono>
 #include <csignal>
 #include <thread>
@@ -19,119 +18,111 @@ int main()
     std::signal(SIGTERM, signalHandler);
 
     rkcam::CameraPipelineConfig config;
-
     config.stream_id = "cam0";
+
+    /*
+     * 队列配置。
+     *
+     * 注意：
+     *   相邻 node 使用相同 queue name，
+     *   CameraPipeline::createOrReuseQueue() 会让它们复用同一个队列对象。
+     */
+    rkcam::PipelineQueueConfig q_cap_to_rga;
+    q_cap_to_rga.name = "cap_to_rga";
+    q_cap_to_rga.capacity = 4;
+    q_cap_to_rga.policy = rkcam::QueueFullPolicy::Block;
+
+    rkcam::PipelineQueueConfig q_rga_to_save;
+    q_rga_to_save.name = "rga_to_save";
+    q_rga_to_save.capacity = 4;
+    q_rga_to_save.policy = rkcam::QueueFullPolicy::Block;
 
     /*
      * CaptureStage:
      *   V4L2 采集 1920x1080 NV12
      *   输出 DmaBuffer
-     *   最多采 100 帧
+     *   最多采集 100 帧
      */
-    config.capture_stage_config.stream_id = "cam0";
+    rkcam::CaptureStageConfig capture_cfg;
+    capture_cfg.stream_id = "cam0";
 
-    config.capture_stage_config.source.device = "/dev/video0";
-    config.capture_stage_config.source.width = 1920;
-    config.capture_stage_config.source.height = 1080;
-    config.capture_stage_config.source.pixel_format = "NV12";
-    config.capture_stage_config.source.buffer_count = 4;
+    capture_cfg.source.device = "/dev/video0";
+    capture_cfg.source.width = 1920;
+    capture_cfg.source.height = 1080;
+    capture_cfg.source.pixel_format = "NV12";
+    capture_cfg.source.buffer_count = 4;
+    capture_cfg.source.export_dma_fd = true;
 
-    /*
-     * 当前 RGA 输入需要 V4L2 dma_fd。
-     */
-    config.capture_stage_config.source.export_dma_fd = true;
-    config.capture_stage_config.output_memory_type =
-        rkcam::VideoMemoryType::DmaBuffer;
-
-    /*
-     * 测试阶段只跑 100 帧。
-     * 停止条件放在 CaptureStage，而不是 RawSaveStage。
-     */
-    config.capture_stage_config.max_frames = 100;
-
-    /*
-     * CaptureStage -> RgaStage
-     *
-     * 测试阶段建议 Block，避免丢帧导致保存帧数不好判断。
-     */
-    config.raw_queue_capacity = 4;
-    config.raw_queue_policy = rkcam::QueueFullPolicy::Block;
+    capture_cfg.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
+    capture_cfg.max_frames = 100;
 
     /*
      * RgaStage:
-     *   input : V4L2 DmaBuffer NV12 1920x1080
-     *   output: MPP Buffer DmaBuffer NV12 640x360
+     *   input : 1920x1080 NV12 DmaBuffer
+     *   output: 640x360 NV12 Cpu
      *
-     * 注意：
-     *   request 输出尺寸/格式必须和 mpp_buffer_pool 保持一致。
+     * 第一版先用 CPU 输出，方便 RawSave 验证。
      */
-    config.rga_stage_config.stage_name = "rga";
+    rkcam::RgaStageConfig rga_cfg;
+    rga_cfg.stage_name = "rga";
 
-    config.rga_stage_config.request.output_width = 640;
-    config.rga_stage_config.request.output_height = 360;
-    config.rga_stage_config.request.output_format = rkcam::PixelFormat::NV12;
-    config.rga_stage_config.request.output_memory_type =
-        rkcam::VideoMemoryType::DmaBuffer;
-    config.rga_stage_config.request.allow_fallback = false;
+    rga_cfg.request.output_width = 640;
+    rga_cfg.request.output_height = 360;
+    rga_cfg.request.output_format = rkcam::PixelFormat::NV12;
+    rga_cfg.request.output_memory_type = rkcam::VideoMemoryType::Cpu;
+    rga_cfg.request.allow_fallback = false;
 
     /*
-     * 关键：RGA 输出 buffer 由 MPP buffer pool 提供。
+     * RawSaveStage:
+     *   保存 RGA 输出后的 640x360 NV12。
      */
-    config.rga_stage_config.output_pool_type = rkcam::RgaOutputPoolType::Mpp;
-
-    config.rga_stage_config.mpp_buffer_pool.pool_name = "rga_mpp_pool";
-    config.rga_stage_config.mpp_buffer_pool.width = 640;
-    config.rga_stage_config.mpp_buffer_pool.height = 360;
-    config.rga_stage_config.mpp_buffer_pool.format = rkcam::PixelFormat::NV12;
-    config.rga_stage_config.mpp_buffer_pool.buffer_count = 4;
+    rkcam::RawSaveStageConfig save_cfg;
+    save_cfg.stage_name = "raw_save";
+    save_cfg.output_path =
+        "/userdata/rkcam/output/stagenode_rga_640x360_nv12.yuv";
+    save_cfg.save_tight_nv12 = true;
 
     /*
-     * 0 表示由 MppBufferPool 自动按 align 计算。
-     *
-     * 640 按 16 对齐仍是 640。
-     * 360 按 16 对齐会变成 368。
-     *
-     * 所以你的 VideoBufferPlane 里应该有：
-     *   stride = 640
-     *   height_stride = 368
-     *
-     * RawSaveStage 保存 tight NV12 时：
-     *   Y 只保存 visible height = 360 行
-     *   UV 起始位置要用 height_stride = 368
+     * StageNode 1: Capture
      */
-    config.rga_stage_config.mpp_buffer_pool.hor_stride = 0;
-    config.rga_stage_config.mpp_buffer_pool.ver_stride = 0;
-    config.rga_stage_config.mpp_buffer_pool.stride_align = 16;
-    config.rga_stage_config.mpp_buffer_pool.height_align = 16;
+    rkcam::StageNodeConfig capture_node;
+    capture_node.name = "capture";
+    capture_node.type = rkcam::StageType::Capture;
+    capture_node.output_queue = q_cap_to_rga;
+    capture_node.capture = capture_cfg;
 
     /*
-     * 如果你的 MppBufferPoolConfig 默认就是 MPP_BUFFER_TYPE_DRM，
-     * 这行可以不写。
-     *
-     * 如果头文件里能直接看到 MPP_BUFFER_TYPE_DRM，也可以显式写：
+     * StageNode 2: RGA
      */
-    config.rga_stage_config.mpp_buffer_pool.buffer_type = MPP_BUFFER_TYPE_DRM;
+    rkcam::StageNodeConfig rga_node;
+    rga_node.name = "rga";
+    rga_node.type = rkcam::StageType::Rga;
+    rga_node.input_queue = q_cap_to_rga;
+    rga_node.output_queue = q_rga_to_save;
+    rga_node.rga = rga_cfg;
 
     /*
-     * RgaStage -> RawSaveStage
+     * StageNode 3: RawSave
      */
-    config.processed_queue_capacity = 4;
-    config.processed_queue_policy = rkcam::QueueFullPolicy::Block;
+    rkcam::StageNodeConfig save_node;
+    save_node.name = "raw_save";
+    save_node.type = rkcam::StageType::RawSave;
+    save_node.input_queue = q_rga_to_save;
+    save_node.raw_save = save_cfg;
 
     /*
-     * DebugStage:
-     *   保存 RGA 写入后的 MPP buffer。
+     * nodes 按 上游 -> 下游 顺序填写。
+     * CameraPipeline 内部 start 时会反过来启动：
+     *   RawSave -> RGA -> Capture
      *
-     * 注意：
-     *   RawSaveStage 需要 frame.buffer->planes[0].data 有效。
-     *   也就是 MPP buffer 能通过 mpp_buffer_get_ptr() 拿到 CPU 地址。
+     * stop 时按这个顺序停止：
+     *   Capture -> RGA -> RawSave
      */
-    config.debug_stage = rkcam::CameraDebugStage::RawSave;
-
-    config.raw_save.stage_name = "raw_save";
-    config.raw_save.output_path =
-        "/userdata/rkcam/output/rga_mppbuf_640x360_nv12.yuv";
-    config.raw_save.save_tight_nv12 = true;
+    config.nodes = {
+        capture_node,
+        rga_node,
+        save_node,
+    };
 
     rkcam::CameraPipeline pipeline(config);
 
