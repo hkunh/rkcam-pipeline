@@ -1,12 +1,14 @@
 #pragma once
 
-#include "rkcam/core/blocking_queue.hpp"
+#include "rkcam/pipeline/pipeline_queue.hpp"
 
 #include "rkcam/pipeline/capture_stage.hpp"
 #include "rkcam/pipeline/fps_stage.hpp"
 #include "rkcam/pipeline/raw_save_stage.hpp"
 #include "rkcam/pipeline/rga_stage.hpp"
 #include "rkcam/pipeline/pipeline_stage.hpp"
+#include "rkcam/pipeline/mpp_stage.hpp"
+#include "rkcam/pipeline/encoded_save_stage.hpp"
 
 #include "rkcam/video/video_frame.hpp"
 
@@ -21,19 +23,13 @@ namespace rkcam {
 enum class StageType {
     Capture,
     Rga,
+    Mpp,
+    EncodedSave,
     Fps,
     RawSave,
 };
 
-struct PipelineQueueConfig{
-    std::string name;
-    size_t capacity = 4;
-    QueueFullPolicy policy = QueueFullPolicy::DropOldest;
-    bool valid() const
-    {
-        return !name.empty();
-    }
-};
+
 struct StageNodeConfig{
     std::string name;
     StageType type = StageType::Capture;
@@ -54,6 +50,8 @@ struct StageNodeConfig{
     */
     CaptureStageConfig capture;
     RgaStageConfig rga;
+    MppStageConfig mpp;
+    EncodedSaveStageConfig encoded_save;
     FpsStageConfig fps;
     RawSaveStageConfig raw_save;
 
@@ -62,9 +60,9 @@ struct StageNodeConfig{
 struct StageNode{
     StageNodeConfig config;
 
-    std::shared_ptr<BlockingQueue<PipelineVideoFrame>> input_queue;
+    std::shared_ptr<IPipelineQueue> input_queue;
     std::unique_ptr<IStage> stage;
-    std::shared_ptr<BlockingQueue<PipelineVideoFrame>> output_queue;
+    std::shared_ptr<IPipelineQueue> output_queue;
 };
 
 struct CameraPipelineConfig {
@@ -94,7 +92,7 @@ private:
     bool initStageNodeQueues();
     bool initStageNodeStages();
 
-    bool createOrReuseQueue(const PipelineQueueConfig& config, std::shared_ptr<BlockingQueue<PipelineVideoFrame>>& queue);
+    bool createOrReuseQueue(const PipelineQueueConfig& config, std::shared_ptr<IPipelineQueue>& queue);
 
     bool createStageForNode(StageNode& node);
 
@@ -111,9 +109,14 @@ private:
 
     /*
      * 所有队列按 name 统一管理。
-     * StageNode 里的 input_queue / output_queue 只是 shared_ptr 引用。
+     *
+     * 注意：
+     *   现在 value 是 IPipelineQueue。
+     *   里面实际可能是：
+     *     VideoFrameQueueBox
+     *     EncodedPacketQueueBox
      */
-     std::unordered_map<std::string, std::shared_ptr<BlockingQueue<PipelineVideoFrame>>> queue_map_;
+     std::unordered_map<std::string, std::shared_ptr<IPipelineQueue>> queue_map_;
      
     /*
     * 每个节点包含：

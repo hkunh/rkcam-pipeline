@@ -92,6 +92,8 @@ add_library(rkcam_pipeline
     pipeline/raw_save_stage.cpp
     pipeline/camera_pipeline.cpp
     pipeline/rga_stage.cpp
+    pipeline/mpp_stage.cpp
+    pipeline/encoded_save_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
