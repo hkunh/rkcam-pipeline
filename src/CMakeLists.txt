@@ -25,8 +25,6 @@ target_link_libraries(rkcam_video_frame PUBLIC
 )
 add_library(rkcam::video_frame ALIAS rkcam_video_frame)
 
-
-
 # =========================
 # MPP
 # =========================
@@ -54,8 +52,6 @@ target_link_libraries(rkcam_mpp_processor PUBLIC
     mpp::mpp
 )
 add_library(rkcam::mpp_processor ALIAS rkcam_mpp_processor)
-
-
 
 
 # =========================
@@ -86,6 +82,59 @@ target_link_libraries(rkcam_rga_processor PUBLIC
 add_library(rkcam::rga_processor ALIAS rkcam_rga_processor)
 
 
+
+
+
+
+# =========================
+# FFmpeg
+# =========================
+find_library(AVFORMAT_LIB avformat
+    PATHS
+        "$ENV{SYSROOT}/usr/lib"
+        "$ENV{SYSROOT}/usr/lib64"
+    NO_DEFAULT_PATH
+)
+
+find_library(AVCODEC_LIB avcodec
+    PATHS
+        "$ENV{SYSROOT}/usr/lib"
+        "$ENV{SYSROOT}/usr/lib64"
+    NO_DEFAULT_PATH
+)
+
+find_library(AVUTIL_LIB avutil
+    PATHS
+        "$ENV{SYSROOT}/usr/lib"
+        "$ENV{SYSROOT}/usr/lib64"
+    NO_DEFAULT_PATH
+)
+
+if(NOT AVFORMAT_LIB OR NOT AVCODEC_LIB OR NOT AVUTIL_LIB)
+    message(FATAL_ERROR "FFmpeg libraries not found in RK_SYSROOT")
+endif()
+
+add_library(ffmpeg::avformat SHARED IMPORTED)
+set_target_properties(ffmpeg::avformat PROPERTIES
+    IMPORTED_LOCATION "${AVFORMAT_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
+)
+
+add_library(ffmpeg::avcodec SHARED IMPORTED)
+set_target_properties(ffmpeg::avcodec PROPERTIES
+    IMPORTED_LOCATION "${AVCODEC_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
+)
+
+add_library(ffmpeg::avutil SHARED IMPORTED)
+set_target_properties(ffmpeg::avutil PROPERTIES
+    IMPORTED_LOCATION "${AVUTIL_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
+)
+
+
+
+
 add_library(rkcam_pipeline
     pipeline/capture_stage.cpp
     pipeline/fps_stage.cpp
@@ -94,13 +143,18 @@ add_library(rkcam_pipeline
     pipeline/rga_stage.cpp
     pipeline/mpp_stage.cpp
     pipeline/encoded_save_stage.cpp
+    pipeline/mp4_record_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
     rkcam::video_frame
     rkcam::video_source
     rkcam::mpp_processor
+    ffmpeg::avformat
+    ffmpeg::avcodec
+    ffmpeg::avutil
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
+
 
 

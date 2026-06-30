@@ -29,6 +29,9 @@ int main()
     rkcam::CameraPipelineConfig config;
     config.stream_id = "cam0";
 
+    /*
+     * Queues
+     */
     rkcam::PipelineQueueConfig q_cap_to_rga;
     q_cap_to_rga.name = "cap_to_rga";
     q_cap_to_rga.value_type = rkcam::PipelineQueueValueType::PipelineVideoFrame;
@@ -41,12 +44,15 @@ int main()
     q_rga_to_mpp.capacity = 4;
     q_rga_to_mpp.policy = rkcam::QueueFullPolicy::Block;
 
-    rkcam::PipelineQueueConfig q_mpp_to_save;
-    q_mpp_to_save.name = "mpp_to_save";
-    q_mpp_to_save.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
-    q_mpp_to_save.capacity = 8;
-    q_mpp_to_save.policy = rkcam::QueueFullPolicy::Block;
+    rkcam::PipelineQueueConfig q_mpp_to_mp4;
+    q_mpp_to_mp4.name = "mpp_to_mp4";
+    q_mpp_to_mp4.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
+    q_mpp_to_mp4.capacity = 8;
+    q_mpp_to_mp4.policy = rkcam::QueueFullPolicy::Block;
 
+    /*
+     * Capture: V4L2 1920x1080 NV12 DMA
+     */
     rkcam::CaptureStageConfig capture_cfg;
     capture_cfg.stream_id = "cam0";
     capture_cfg.source.device = "/dev/video0";
@@ -58,6 +64,9 @@ int main()
     capture_cfg.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
     capture_cfg.max_frames = 100;
 
+    /*
+     * RGA: 1920x1080 NV12 DMA -> 640x360 NV12 MppBuffer
+     */
     rkcam::RgaStageConfig rga_cfg;
     rga_cfg.stage_name = "rga";
     rga_cfg.request.output_width = 640;
@@ -75,6 +84,9 @@ int main()
     rga_cfg.mpp_buffer_pool.hor_stride = 640;
     rga_cfg.mpp_buffer_pool.ver_stride = alignTo(360, 16);
 
+    /*
+     * MPP: H264 encode
+     */
     rkcam::MppStageConfig mpp_cfg;
     mpp_cfg.stage_name = "mpp";
     mpp_cfg.encoder.width = 640;
@@ -87,12 +99,20 @@ int main()
     mpp_cfg.encoder.gop = 30;
     mpp_cfg.encoder.bitrate = 2 * 1000 * 1000;
 
-    rkcam::EncodedSaveStageConfig encoded_save_cfg;
-    encoded_save_cfg.stage_name = "encoded_save";
-    encoded_save_cfg.output_path =
-        "/userdata/rkcam/output/pipeline_mpp_640x360.h264";
-    encoded_save_cfg.max_packets = 0;
+    /*
+     * MP4 Record
+     */
+    rkcam::Mp4RecordStageConfig mp4_cfg;
+    mp4_cfg.stage_name = "mp4_record";
+    mp4_cfg.output_path = "/userdata/rkcam/output/pipeline_640x360.mp4";
+    mp4_cfg.width = 640;
+    mp4_cfg.height = 360;
+    mp4_cfg.fps = 30;
+    mp4_cfg.codec = rkcam::CodecType::H264;
 
+    /*
+     * Stage nodes
+     */
     rkcam::StageNodeConfig capture_node;
     capture_node.name = "capture";
     capture_node.type = rkcam::StageType::Capture;
@@ -110,20 +130,20 @@ int main()
     mpp_node.name = "mpp";
     mpp_node.type = rkcam::StageType::Mpp;
     mpp_node.input_queue = q_rga_to_mpp;
-    mpp_node.output_queue = q_mpp_to_save;
+    mpp_node.output_queue = q_mpp_to_mp4;
     mpp_node.mpp = mpp_cfg;
 
-    rkcam::StageNodeConfig save_node;
-    save_node.name = "encoded_save";
-    save_node.type = rkcam::StageType::EncodedSave;
-    save_node.input_queue = q_mpp_to_save;
-    save_node.encoded_save = encoded_save_cfg;
+    rkcam::StageNodeConfig mp4_node;
+    mp4_node.name = "mp4_record";
+    mp4_node.type = rkcam::StageType::Mp4Record;
+    mp4_node.input_queue = q_mpp_to_mp4;
+    mp4_node.mp4_record = mp4_cfg;
 
     config.nodes = {
         capture_node,
         rga_node,
         mpp_node,
-        save_node,
+        mp4_node,
     };
 
     rkcam::CameraPipeline pipeline(config);

@@ -3,12 +3,15 @@
 #include <cstdint>
 #include <vector>
 #include <string>
-
+#include <memory>
 namespace rkcam{
 enum class MediaType{
 	Unknown,
 	Video,
 	Audio,
+};
+struct EncodedBuffer {
+    std::vector<uint8_t> data;
 };
 
 enum class CodecType{
@@ -26,7 +29,7 @@ struct EncodedPacket{
 	MediaType media_type = MediaType::Unknown;
 	CodecType codec = CodecType::Unknown;
 	
-	std::vector<uint8_t> data;
+	std::shared_ptr<EncodedBuffer> buffer;
 
 	int64_t pts_us = 0;
 	int64_t dts_us = 0;
@@ -35,6 +38,20 @@ struct EncodedPacket{
 	bool key_frame = false;
 	bool eos = false;
 
+	const uint8_t* data() const
+    {
+        return buffer && !buffer->data.empty()
+            ? buffer->data.data()
+            : nullptr;
+    }
+	size_t size() const
+    {
+        return buffer ? buffer->data.size() : 0;
+    }
+	bool empty() const
+    {
+        return !buffer || buffer->data.empty();
+    }
 	
 };
 

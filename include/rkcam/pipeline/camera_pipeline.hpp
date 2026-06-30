@@ -9,6 +9,7 @@
 #include "rkcam/pipeline/pipeline_stage.hpp"
 #include "rkcam/pipeline/mpp_stage.hpp"
 #include "rkcam/pipeline/encoded_save_stage.hpp"
+#include "rkcam/pipeline/mp4_record_stage.hpp"
 
 #include "rkcam/video/video_frame.hpp"
 
@@ -25,6 +26,7 @@ enum class StageType {
     Rga,
     Mpp,
     EncodedSave,
+    Mp4Record,
     Fps,
     RawSave,
 };
@@ -52,8 +54,10 @@ struct StageNodeConfig{
     RgaStageConfig rga;
     MppStageConfig mpp;
     EncodedSaveStageConfig encoded_save;
+    Mp4RecordStageConfig mp4_record;
     FpsStageConfig fps;
     RawSaveStageConfig raw_save;
+    
 
 };
 

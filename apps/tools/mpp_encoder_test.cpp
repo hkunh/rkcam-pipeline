@@ -323,14 +323,14 @@ int main()
             continue;
         }
 
-        if (!packet.data.empty()) {
+        if (!packet.empty()) {
             const size_t written =
-                std::fwrite(packet.data.data(), 1, packet.data.size(), fp);
+                std::fwrite(packet.data(), 1, packet.size(), fp);
 
-            if (written != packet.data.size()) {
+            if (written != packet.size()) {
                 RKCAM_LOGE("fwrite failed, written=%zu expected=%zu",
                            written,
-                           packet.data.size());
+                           packet.size());
                 ++failed_frames;
                 break;
             }
@@ -342,7 +342,7 @@ int main()
             RKCAM_LOGI("encoded_frames=%d frame_id=%lld packet_size=%zu key=%d",
                        encoded_frames,
                        static_cast<long long>(packet.pts_us),
-                       packet.data.size(),
+                       packet.size(),
                        packet.key_frame ? 1 : 0);
         }
     }

@@ -457,8 +457,9 @@ bool MppEncoder::encode(
     packet.media_type = MediaType::Video;
     packet.codec = config_.codec;
 
-
-    packet.data.assign(src, src + length);
+    auto buffer = std::make_shared<EncodedBuffer>();
+    buffer->data.assign(src, src + length);
+    packet.buffer = std::move(buffer);
 
     /*
     * 优先用 MPP packet 自己的 pts/dts。
@@ -468,7 +469,17 @@ bool MppEncoder::encode(
     const RK_S64 pkt_dts = mpp_packet_get_dts(mpp_packet);
 
     packet.pts_us = pkt_pts >= 0 ? pkt_pts : frame.pts_us;
-    packet.dts_us = pkt_dts >= 0 ? pkt_dts : packet.pts_us;
+    /*
+    * 当前没有 B 帧：
+    *   编码输出顺序 == 显示顺序
+    *   DTS == PTS
+    *
+    * 不要用 mpp_packet_get_dts() 返回的 0。
+    */
+    packet.dts_us = packet.pts_us;
+    /*
+    * 如果 frame.duration_us 没有填，后面 Mp4RecordStage 会用 fps 兜底。
+    */
     packet.duration_us = frame.duration_us;
 
     bool key_frame = false;

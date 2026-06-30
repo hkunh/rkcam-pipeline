@@ -43,11 +43,16 @@ $Files = @(
         Name = "rga_process_test"
         LocalPath = Join-Path $BuildDir "apps\tools\rga_process_test"
         RemotePath = "/userdata/rkcam/bin/rga_process_test"
-    }
+    },
     @{
         Name = "mpp_encoder_test"
         LocalPath = Join-Path $BuildDir "apps\tools\mpp_encoder_test"
         RemotePath = "/userdata/rkcam/bin/mpp_encoder_test"
+    },
+    @{
+        Name = "mp4_mux_h264_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\mp4_mux_h264_test"
+        RemotePath = "/userdata/rkcam/bin/mp4_mux_h264_test"
     }
 )
 

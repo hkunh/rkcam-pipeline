@@ -452,6 +452,29 @@ bool CameraPipeline::createStageForNode(StageNode& node)
 
             return true;
         }
+        case StageType::Mp4Record:{
+            auto * in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queue, node.config.name.c_str());
+            if (!in_q) {
+                RKCAM_LOGE("[%s] Mp4RecordStage %s requires EncodedPacket input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            Mp4RecordStageConfig mp4_cfg = node.config.mp4_record;
+            if (mp4_cfg.stage_name.empty()) {
+                mp4_cfg.stage_name = node.config.name;
+            }
+
+            node.stage = std::make_unique<Mp4RecordStage>(mp4_cfg, *in_q);
+
+            RKCAM_LOGI("[%s] create Mp4RecordStage: %s <- %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str());
+
+            return true;
+        }
         default:
             RKCAM_LOGE("[%s] unsupported stage type, stage=%s",
                    config_.stream_id.c_str(),

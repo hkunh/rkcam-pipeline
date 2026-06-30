@@ -98,14 +98,14 @@ bool EncodedSaveStage::writePacket(const EncodedPacket& packet)
         return false;
     }
 
-    if (packet.data.empty()) {
+    if (packet.empty()) {
         return true;
     }
 
     const size_t written =
-        std::fwrite(packet.data.data(), 1, packet.data.size(), fp_);
+        std::fwrite(packet.data(), 1, packet.size(), fp_);
 
-    return written == packet.data.size();
+    return written == packet.size();
 }
 
 static int64_t nowUs()
@@ -135,7 +135,7 @@ void EncodedSaveStage::threadLoop()
                        config_.stage_name.c_str(),
                        packet.stream_id.c_str(),
                        static_cast<long long>(packet.pts_us),
-                       packet.data.size());
+                       packet.size());
             continue;
         }
 
@@ -151,7 +151,7 @@ void EncodedSaveStage::threadLoop()
                        saved_packets_,
                        packet.stream_id.c_str(),
                        static_cast<long long>(packet.pts_us),
-                       packet.data.size(),
+                       packet.size(),
                        packet.key_frame ? 1 : 0,
                        latency_us / 1000.0); // 转换为毫秒输出
         }

@@ -100,7 +100,7 @@ void MppStage::threadLoop(){
         * 你的当前 encode() 是阻塞等待 packet 的版本，
         * 正常情况下这里不会为空，但保留这个判断更稳。
         */
-        if (packet.data.empty()) {
+        if (packet.empty()) {
             RKCAM_LOGE("[%s] encode output empty packet, stream=%s frame_id=%lld",
                        config_.stage_name.c_str(),
                        frame.stream_id.c_str(),
