@@ -53,6 +53,16 @@ $Files = @(
         Name = "mp4_mux_h264_test"
         LocalPath = Join-Path $BuildDir "apps\tools\mp4_mux_h264_test"
         RemotePath = "/userdata/rkcam/bin/mp4_mux_h264_test"
+    },
+    @{
+        Name = "drm_info_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\drm_info_test"
+        RemotePath = "/userdata/rkcam/bin/drm_info_test"
+    },
+    @{
+        Name = "drm_color_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\drm_color_test"
+        RemotePath = "/userdata/rkcam/bin/drm_color_test"
     }
 )
 

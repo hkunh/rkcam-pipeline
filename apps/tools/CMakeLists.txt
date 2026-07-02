@@ -43,8 +43,6 @@ target_link_libraries(mpp_encoder_test PRIVATE
     rkcam::mpp_processor
 )
 
-
-
 add_executable(mp4_mux_h264_test
     mp4_mux_h264_test.cpp
 )
@@ -60,4 +58,26 @@ set_target_properties(mp4_mux_h264_test PROPERTIES
     BUILD_RPATH "\$ORIGIN/../lib"
     INSTALL_RPATH "\$ORIGIN/../lib"
     BUILD_WITH_INSTALL_RPATH TRUE
+)
+
+add_executable(drm_info_test
+    drm_info_test.cpp
+)
+target_include_directories(drm_info_test PRIVATE
+    "$ENV{RK_SYSROOT}/usr/inclue"
+    "$ENV{RK_SYSROOT}/usr/include/libdrm"
+)
+target_link_libraries(drm_info_test PRIVATE
+    drm
+)
+
+add_executable(drm_color_test
+    drm_color_test.cpp
+)
+target_include_directories(drm_color_test PRIVATE
+    "$ENV{RK_SYSROOT}/usr/include"
+    "$ENV{RK_SYSROOT}/usr/include/libdrm"
+)
+target_link_libraries(drm_color_test PRIVATE
+    drm
 )
