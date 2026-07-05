@@ -84,6 +84,36 @@ add_library(rkcam::rga_processor ALIAS rkcam_rga_processor)
 
 
 
+# =========================
+# drm
+# =========================
+
+set(DRM_LIB "$ENV{RK_SYSROOT}/usr/lib/libdrm.so")
+set(DRM_INC "$ENV{RK_SYSROOT}/usr/include/libdrm")
+if(NOT EXISTS "${DRM_LIB}")
+    message(FATAL_LIB "DRM library not found: ${DRM_LIB}")
+endif()
+
+add_library(drm::drm SHARED IMPORTED)
+set_target_properties(drm::drm PROPERTIES
+    IMPORTED_LOCATION "${DRM_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${DRM_INC};${RK_SYSROOT}/usr/include"
+)
+
+add_library(rkcam_drm 
+    platform/linux/drm/drm_device.cpp
+    platform/linux/drm/drm_buffer_pool.cpp
+    platform/linux/drm/drm_display_sink.cpp
+)
+target_include_directories(rkcam_drm PUBLIC
+    ${CMAKE_SOURCE_DIR}/inclue
+)
+target_link_libraries(rkcam_drm PUBLIC
+    rkcam::core
+    drm::drm
+)
+
+add_library(rkcam::drm ALIAS rkcam_drm)
 
 
 # =========================
@@ -144,6 +174,7 @@ add_library(rkcam_pipeline
     pipeline/mpp_stage.cpp
     pipeline/encoded_save_stage.cpp
     pipeline/mp4_record_stage.cpp
+    pipeline/display_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
@@ -153,6 +184,7 @@ target_link_libraries(rkcam_pipeline PUBLIC
     ffmpeg::avformat
     ffmpeg::avcodec
     ffmpeg::avutil
+    rkcam::drm
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
 

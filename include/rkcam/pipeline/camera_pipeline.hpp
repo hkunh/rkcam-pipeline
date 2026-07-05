@@ -10,6 +10,8 @@
 #include "rkcam/pipeline/mpp_stage.hpp"
 #include "rkcam/pipeline/encoded_save_stage.hpp"
 #include "rkcam/pipeline/mp4_record_stage.hpp"
+#include "rkcam/pipeline/display_stage.hpp"
+#include "rkcam/platform/linux/drm/drm_display_sink.hpp"
 
 #include "rkcam/video/video_frame.hpp"
 
@@ -29,6 +31,7 @@ enum class StageType {
     Mp4Record,
     Fps,
     RawSave,
+    Display,
 };
 
 
@@ -57,7 +60,9 @@ struct StageNodeConfig{
     Mp4RecordStageConfig mp4_record;
     FpsStageConfig fps;
     RawSaveStageConfig raw_save;
-    
+
+    DisplayStageConfig display;
+    DrmDisplaySinkConfig drm_display;
 
 };
 

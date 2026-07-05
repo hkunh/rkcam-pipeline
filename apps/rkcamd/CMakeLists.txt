@@ -7,4 +7,5 @@ target_link_libraries(rkcamd PRIVATE
 	rkcam::pipeline
 	rkcam::video_source
 	rkcam::rga_processor
+	rkcam::drm
 )

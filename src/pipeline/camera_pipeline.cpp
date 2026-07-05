@@ -475,6 +475,33 @@ bool CameraPipeline::createStageForNode(StageNode& node)
 
             return true;
         }
+        case StageType::Display:{
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] DisplayStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+            
+            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(node.input_queue, node.config.name);
+            if (!in_q) {
+                return false;
+            }
+
+            DisplayStageConfig display_cfg = node.config.display;
+            if (display_cfg.stage_name.empty()) {
+                display_cfg.stage_name = node.config.name;
+            }
+            auto sink = std::make_unique<DrmDisplaySink>(node.config.drm_display);
+            node.stage = std::make_unique<DisplayStage>(display_cfg, *in_q, std::move(sink));
+
+            RKCAM_LOGI("[%s] create DisplayStage: %s <- %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str());
+
+            return true;
+        }
         default:
             RKCAM_LOGE("[%s] unsupported stage type, stage=%s",
                    config_.stream_id.c_str(),

@@ -5,6 +5,7 @@
 #include "rkcam/platform/rockchip/rga/rga_processor.hpp"
 #include "rkcam/core/blocking_queue.hpp"
 #include "rkcam/platform/rockchip/mpp/mpp_buffer_pool.hpp"
+#include "rkcam/platform/linux/drm/drm_buffer_pool.hpp"
 
 #include <atomic>
 #include <string>
@@ -15,6 +16,7 @@ namespace rkcam{
 enum class RgaOutputPoolType{
     None,
     Mpp,
+    Drm,
 };
 struct RgaStageConfig{
     std::string stage_name = "rga";
@@ -36,6 +38,7 @@ struct RgaStageConfig{
     RgaOutputPoolType output_pool_type = RgaOutputPoolType::Mpp;
 
     MppBufferPoolConfig mpp_buffer_pool;
+    DrmBufferPoolConfig drm_buffer_pool;
 
 };
 class RgaStage : public IStage{

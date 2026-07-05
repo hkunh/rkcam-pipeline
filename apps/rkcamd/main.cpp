@@ -26,139 +26,130 @@ int main()
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    rkcam::CameraPipelineConfig config;
-    config.stream_id = "cam0";
+    rkcam::CameraPipelineConfig cfg;
+    cfg.stream_id = "cam0";
 
     /*
-     * Queues
-     */
-    rkcam::PipelineQueueConfig q_cap_to_rga;
-    q_cap_to_rga.name = "cap_to_rga";
-    q_cap_to_rga.value_type = rkcam::PipelineQueueValueType::PipelineVideoFrame;
-    q_cap_to_rga.capacity = 4;
-    q_cap_to_rga.policy = rkcam::QueueFullPolicy::Block;
-
-    rkcam::PipelineQueueConfig q_rga_to_mpp;
-    q_rga_to_mpp.name = "rga_to_mpp";
-    q_rga_to_mpp.value_type = rkcam::PipelineQueueValueType::PipelineVideoFrame;
-    q_rga_to_mpp.capacity = 4;
-    q_rga_to_mpp.policy = rkcam::QueueFullPolicy::Block;
-
-    rkcam::PipelineQueueConfig q_mpp_to_mp4;
-    q_mpp_to_mp4.name = "mpp_to_mp4";
-    q_mpp_to_mp4.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
-    q_mpp_to_mp4.capacity = 8;
-    q_mpp_to_mp4.policy = rkcam::QueueFullPolicy::Block;
+    * queue: capture -> preview_rga
+    */
+    rkcam::PipelineQueueConfig cap_to_preview;
+    cap_to_preview.name = "cap_to_preview";
+    cap_to_preview.value_type = rkcam::PipelineQueueValueType::PipelineVideoFrame;
+    cap_to_preview.capacity = 2;
+    cap_to_preview.policy = rkcam::QueueFullPolicy::DropOldest;
 
     /*
-     * Capture: V4L2 1920x1080 NV12 DMA
-     */
-    rkcam::CaptureStageConfig capture_cfg;
-    capture_cfg.stream_id = "cam0";
-    capture_cfg.source.device = "/dev/video0";
-    capture_cfg.source.width = 1920;
-    capture_cfg.source.height = 1080;
-    capture_cfg.source.pixel_format = "NV12";
-    capture_cfg.source.buffer_count = 4;
-    capture_cfg.source.export_dma_fd = true;
-    capture_cfg.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
-    capture_cfg.max_frames = 100;
+    * queue: preview_rga -> display
+    */
+    rkcam::PipelineQueueConfig preview_to_display;
+    preview_to_display.name = "preview_to_display";
+    preview_to_display.value_type = rkcam::PipelineQueueValueType::PipelineVideoFrame;
+    preview_to_display.capacity = 2;
+    preview_to_display.policy = rkcam::QueueFullPolicy::DropOldest;
 
     /*
-     * RGA: 1920x1080 NV12 DMA -> 640x360 NV12 MppBuffer
-     */
-    rkcam::RgaStageConfig rga_cfg;
-    rga_cfg.stage_name = "rga";
-    rga_cfg.request.output_width = 640;
-    rga_cfg.request.output_height = 360;
-    rga_cfg.request.output_format = rkcam::PixelFormat::NV12;
-    rga_cfg.request.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
-    rga_cfg.request.allow_fallback = false;
+    * Capture
+    */
+    rkcam::StageNodeConfig capture;
+    capture.name = "capture";
+    capture.type = rkcam::StageType::Capture;
+    capture.output_queue = cap_to_preview;
 
-    rga_cfg.output_pool_type = rkcam::RgaOutputPoolType::Mpp;
-    rga_cfg.mpp_buffer_pool.pool_name = "rga_mpp_pool";
-    rga_cfg.mpp_buffer_pool.width = 640;
-    rga_cfg.mpp_buffer_pool.height = 360;
-    rga_cfg.mpp_buffer_pool.format = rkcam::PixelFormat::NV12;
-    rga_cfg.mpp_buffer_pool.buffer_count = 4;
-    rga_cfg.mpp_buffer_pool.hor_stride = 640;
-    rga_cfg.mpp_buffer_pool.ver_stride = alignTo(360, 16);
+    capture.capture.stream_id = "cam0";
+    capture.capture.max_frames = 0;
+    capture.capture.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
 
-    /*
-     * MPP: H264 encode
-     */
-    rkcam::MppStageConfig mpp_cfg;
-    mpp_cfg.stage_name = "mpp";
-    mpp_cfg.encoder.width = 640;
-    mpp_cfg.encoder.height = 360;
-    mpp_cfg.encoder.input_format = rkcam::PixelFormat::NV12;
-    mpp_cfg.encoder.hor_stride = 0;
-    mpp_cfg.encoder.ver_stride = 0;
-    mpp_cfg.encoder.codec = rkcam::CodecType::H264;
-    mpp_cfg.encoder.fps = 30;
-    mpp_cfg.encoder.gop = 30;
-    mpp_cfg.encoder.bitrate = 2 * 1000 * 1000;
+    capture.capture.source.device = "/dev/video0";
+    capture.capture.source.width = 1920;
+    capture.capture.source.height = 1080;
+    capture.capture.source.pixel_format = "NV12";
+    capture.capture.source.buffer_count = 4;
+    capture.capture.source.export_dma_fd = true;
 
     /*
-     * MP4 Record
-     */
-    rkcam::Mp4RecordStageConfig mp4_cfg;
-    mp4_cfg.stage_name = "mp4_record";
-    mp4_cfg.output_path = "/userdata/rkcam/output/pipeline_640x360.mp4";
-    mp4_cfg.width = 640;
-    mp4_cfg.height = 360;
-    mp4_cfg.fps = 30;
-    mp4_cfg.codec = rkcam::CodecType::H264;
+    * RGA preview
+    *
+    * 第一版先只 resize 到 1080x1920。 widthxheight
+    * 如果画面被拉伸，下一步再加 rotate/crop/keep_aspect。
+    */
+    rkcam::StageNodeConfig preview_rga;
+    preview_rga.name = "preview_rga";
+    preview_rga.type = rkcam::StageType::Rga;
+    preview_rga.input_queue = cap_to_preview;
+    preview_rga.output_queue = preview_to_display;
+
+    preview_rga.rga.stage_name = "preview_rga";
+
+    int temp_width = 360;
+    int temp_height = 720;
+
+    preview_rga.rga.request.output_width = temp_width;
+    preview_rga.rga.request.output_height = temp_height;
+    preview_rga.rga.request.output_format = rkcam::PixelFormat::NV12;
+    preview_rga.rga.request.output_memory_type = rkcam::VideoMemoryType::DmaBuffer;
+    preview_rga.rga.request.rotate = rkcam::RgaRotateMode::Rotate270;
+
+    preview_rga.rga.output_pool_type = rkcam::RgaOutputPoolType::Drm;
+
+    preview_rga.rga.drm_buffer_pool.pool_name = "preview_drm_pool";
+    preview_rga.rga.drm_buffer_pool.device = "/dev/dri/card0";
+    preview_rga.rga.drm_buffer_pool.width = temp_width;
+    preview_rga.rga.drm_buffer_pool.height = temp_height;
+    preview_rga.rga.drm_buffer_pool.format = rkcam::PixelFormat::NV12;
+    preview_rga.rga.drm_buffer_pool.buffer_count = 4;
 
     /*
-     * Stage nodes
-     */
-    rkcam::StageNodeConfig capture_node;
-    capture_node.name = "capture";
-    capture_node.type = rkcam::StageType::Capture;
-    capture_node.output_queue = q_cap_to_rga;
-    capture_node.capture = capture_cfg;
+    * RGA 直接写 dma_fd，不需要 CPU mmap。
+    * 但如果你想调试保存 DRM buffer 内容，可以临时设 true。
+    */
+    preview_rga.rga.drm_buffer_pool.map_cpu = false;
+    preview_rga.rga.drm_buffer_pool.clear_on_init = true;
 
-    rkcam::StageNodeConfig rga_node;
-    rga_node.name = "rga";
-    rga_node.type = rkcam::StageType::Rga;
-    rga_node.input_queue = q_cap_to_rga;
-    rga_node.output_queue = q_rga_to_mpp;
-    rga_node.rga = rga_cfg;
+    /*
+    * Display
+    */
+    rkcam::StageNodeConfig display;
+    display.name = "display";
+    display.type = rkcam::StageType::Display;
+    display.input_queue = preview_to_display;
 
-    rkcam::StageNodeConfig mpp_node;
-    mpp_node.name = "mpp";
-    mpp_node.type = rkcam::StageType::Mpp;
-    mpp_node.input_queue = q_rga_to_mpp;
-    mpp_node.output_queue = q_mpp_to_mp4;
-    mpp_node.mpp = mpp_cfg;
+    display.display.stage_name = "display";
+    display.display.max_failed_frames = 30;
 
-    rkcam::StageNodeConfig mp4_node;
-    mp4_node.name = "mp4_record";
-    mp4_node.type = rkcam::StageType::Mp4Record;
-    mp4_node.input_queue = q_mpp_to_mp4;
-    mp4_node.mp4_record = mp4_cfg;
+    display.drm_display.sink_name = "drm_display";
+    display.drm_display.width = temp_width;
+    display.drm_display.height = temp_height;
+    display.drm_display.format = rkcam::PixelFormat::NV12;
+    display.drm_display.hold_frame_count = 2;
+    display.drm_display.strict_frame_size = true;
 
-    config.nodes = {
-        capture_node,
-        rga_node,
-        mpp_node,
-        mp4_node,
+    display.drm_display.dst_rect.x = 720;
+    display.drm_display.dst_rect.y = 360;
+    display.drm_display.dst_rect.width = temp_width;
+    display.drm_display.dst_rect.height = temp_height;
+
+    display.drm_display.drm.device = "/dev/dri/card0";
+    display.drm_display.drm.connector_id = 150;
+    display.drm_display.drm.crtc_id = 85;
+    display.drm_display.drm.plane_id = 101;
+    display.drm_display.drm.format = rkcam::PixelFormat::NV12;
+    display.drm_display.drm.clear_plane_on_close = true;
+
+    cfg.nodes = {
+        capture,
+        preview_rga,
+        display,
     };
 
-    rkcam::CameraPipeline pipeline(config);
+    rkcam::CameraPipeline pipeline(cfg);
 
     if (!pipeline.start()) {
         RKCAM_LOGE("CameraPipeline start failed");
         return 1;
     }
 
-    while (g_running && pipeline.isRunning()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    sleep(30);
 
     pipeline.stop();
-
-    RKCAM_LOGI("rkcamd exit");
     return 0;
 }

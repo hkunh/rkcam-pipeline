@@ -100,6 +100,25 @@ bool RgaStage::createOutputPool()
                    static_cast<int>(output_pool_->format()));
             return true;
         }
+        case RgaOutputPoolType::Drm:{
+            auto pool = std::make_shared<DrmBufferPool>(config_.drm_buffer_pool);
+            if(!pool->init())
+            {
+                RKCAM_LOGE("[%s] DrmBufferPool init failed",
+                        config_.stage_name.c_str());
+                return false;
+            }
+            output_pool_ = pool;
+            RKCAM_LOGI("[%s] use DrmBufferPool: %dx%d stride=%dx%d format=%d",
+                    config_.stage_name.c_str(),
+                    output_pool_->width(),
+                    output_pool_->height(),
+                    output_pool_->horStride(),
+                    output_pool_->verStride(),
+                    static_cast<int>(output_pool_->format()));
+
+            return true;
+        }
         default:
             RKCAM_LOGE("[%s] DmaBuffer output requires output pool",
                    config_.stage_name.c_str());
