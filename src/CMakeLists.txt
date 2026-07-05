@@ -175,6 +175,7 @@ add_library(rkcam_pipeline
     pipeline/encoded_save_stage.cpp
     pipeline/mp4_record_stage.cpp
     pipeline/display_stage.cpp
+    pipeline/videoframe_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core

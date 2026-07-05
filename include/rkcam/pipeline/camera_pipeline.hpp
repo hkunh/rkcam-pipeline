@@ -12,6 +12,7 @@
 #include "rkcam/pipeline/mp4_record_stage.hpp"
 #include "rkcam/pipeline/display_stage.hpp"
 #include "rkcam/platform/linux/drm/drm_display_sink.hpp"
+#include "rkcam/pipeline/videoframe_tee_stage.hpp"
 
 #include "rkcam/video/video_frame.hpp"
 
@@ -32,6 +33,7 @@ enum class StageType {
     Fps,
     RawSave,
     Display,
+    VideoFrameTee,
 };
 
 
@@ -43,11 +45,23 @@ struct StageNodeConfig{
      * input_queue:
      *   Capture 这种 source stage 可以为空。
      *
-     * output_queue:
+     * output_queues:
      *   RawSave / Fps 这种 sink stage 可以为空。
      */
     PipelineQueueConfig input_queue;
-    PipelineQueueConfig output_queue;
+    /*
+     * 所有输出统一使用数组。
+     *
+     * 单输出 stage:
+     *   output_queues = { q };
+     *
+     * sink stage:
+     *   output_queues = {};
+     *
+     * tee stage:
+     *   output_queues = { q1, q2, ... };
+     */
+    std::vector<PipelineQueueConfig> output_queues;
 
     /*
     * 每个 stage 自己的配置。
@@ -64,6 +78,8 @@ struct StageNodeConfig{
     DisplayStageConfig display;
     DrmDisplaySinkConfig drm_display;
 
+    VideoFrameTeeStageConfig video_frame_tee;
+
 };
 
 struct StageNode{
@@ -71,7 +87,7 @@ struct StageNode{
 
     std::shared_ptr<IPipelineQueue> input_queue;
     std::unique_ptr<IStage> stage;
-    std::shared_ptr<IPipelineQueue> output_queue;
+    std::vector<std::shared_ptr<IPipelineQueue>> output_queues;
 };
 
 struct CameraPipelineConfig {
