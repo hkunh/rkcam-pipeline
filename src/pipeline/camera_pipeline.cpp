@@ -575,6 +575,64 @@ bool CameraPipeline::createStageForNode(StageNode& node)
 
             return true;
         }
+        case StageType::EncodedPacketTee: {
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] EncodedPacketTeeStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            if (node.output_queues.empty()) {
+                RKCAM_LOGE("[%s] EncodedPacketTeeStage %s requires output_queues",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            auto* in_q = getTypedQueue<
+                EncodedPacket,
+                PipelineQueueValueType::EncodedPacket>(
+                    node.input_queue,
+                    node.config.name);
+
+            if (!in_q) {
+                return false;
+            }
+
+            std::vector<BlockingQueue<EncodedPacket>*> out_queues;
+
+            for (const auto& output_box : node.output_queues) {
+                auto* out_q = getTypedQueue<
+                    EncodedPacket,
+                    PipelineQueueValueType::EncodedPacket>(
+                        output_box,
+                        node.config.name);
+
+                if (!out_q) {
+                    return false;
+                }
+
+                out_queues.push_back(out_q);
+            }
+
+            EncodedPacketTeeStageConfig tee_cfg = node.config.encoded_packet_tee;
+            if (tee_cfg.stage_name.empty()) {
+                tee_cfg.stage_name = node.config.name;
+            }
+
+            node.stage = std::make_unique<EncodedPacketTeeStage>(
+                tee_cfg,
+                *in_q,
+                out_queues);
+
+            RKCAM_LOGI("[%s] create EncodedPacketTeeStage: %s outputs=%zu",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    out_queues.size());
+
+            return true;
+        }
         default:
             RKCAM_LOGE("[%s] unsupported stage type, stage=%s",
                    config_.stream_id.c_str(),
