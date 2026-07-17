@@ -177,6 +177,10 @@ bool extractSpsPpsFromAnnexB(
  * 注意：
  *   这是给 FFmpeg AVCodecParameters::extradata 的。
  *   不是修改 MPP 输出的 packet。
+ * 另外，对于mp4， ffmpeg原本要求extradata是AVCC格式的，但是传入annexB,ffmpeg也会自动转换
+ * FFmpeg 的 H.264 封装逻辑非常聪明。它发现你喂给它的是 Annex B 格式的 SPS/PPS，而 MP4 物理文件写入必须使用 AVCC 格式。
+  *于是，它的底层源码会调用转换函数，自动帮你把这个 Annex B 的 extradata 重构、组装为标准 AVCC 格式的 AVCDecoderConfigurationRecord
+
  */
  bool buildAnnexBExtradata(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, std::vector<uint8_t>& extradata)
  {

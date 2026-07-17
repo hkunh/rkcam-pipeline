@@ -33,7 +33,7 @@ rkcam::BlockingQueue<T>* getTypeQueue(
                    stage_name.c_str());
         return nullptr;
     }
-    return &typed->queue();
+    return &typed->queue();  //返回队列的地址
 }
 std::shared_ptr<IPipelineQueue> getSingleOutputQueue(
     const StageNode& node,
@@ -506,6 +506,37 @@ bool CameraPipeline::createStageForNode(StageNode& node)
 
             return true;
         }
+        case StageType::RtspPush:{
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] RtspPushStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+            if (!node.output_queues.empty()) {
+                RKCAM_LOGE("[%s] RtspPushStage %s should not have output_queues, got=%zu",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str(),
+                        node.output_queues.size());
+                return false;
+            }
+            auto* in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queue, node.config.name);
+            if (!in_q) {
+                return false;
+            }
+            RtspPushStageConfig rtsp_cfg = node.config.rtsp_push;
+            if (rtsp_cfg.stage_name.empty()) {
+                rtsp_cfg.stage_name = node.config.name;
+            }
+            node.stage = std::make_unique<RtspPushStage>(rtsp_cfg, *in_q);
+            RKCAM_LOGI("[%s] create RtspPushStage: %s <- %s url=%s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str(),
+                    rtsp_cfg.url.c_str());
+
+            return true;
+        }
         case StageType::Display:{
             if (!node.input_queue) {
                 RKCAM_LOGE("[%s] DisplayStage %s requires input_queue",
@@ -590,7 +621,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 return false;
             }
 
-            auto* in_q = getTypedQueue<
+            auto* in_q = getTypeQueue<
                 EncodedPacket,
                 PipelineQueueValueType::EncodedPacket>(
                     node.input_queue,
@@ -603,7 +634,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             std::vector<BlockingQueue<EncodedPacket>*> out_queues;
 
             for (const auto& output_box : node.output_queues) {
-                auto* out_q = getTypedQueue<
+                auto* out_q = getTypeQueue<
                     EncodedPacket,
                     PipelineQueueValueType::EncodedPacket>(
                         output_box,

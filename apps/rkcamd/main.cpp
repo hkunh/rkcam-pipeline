@@ -120,13 +120,38 @@ int main()
     record_to_mpp.policy = rkcam::QueueFullPolicy::DropOldest;
 
     /*
-     * Mpp -> Mp4Record
+     * Mpp -> EncodedPacketTee
      */
-    rkcam::PipelineQueueConfig mpp_to_mp4;
-    mpp_to_mp4.name = "mpp_to_mp4";
-    mpp_to_mp4.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
-    mpp_to_mp4.capacity = 16;
-    mpp_to_mp4.policy = rkcam::QueueFullPolicy::DropOldest;
+    rkcam::PipelineQueueConfig mpp_to_encodedpacket_tee;
+    mpp_to_encodedpacket_tee.name = "mpp_to_encodedpacket_tee";
+    mpp_to_encodedpacket_tee.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
+    mpp_to_encodedpacket_tee.capacity = 16;
+    mpp_to_encodedpacket_tee.policy = rkcam::QueueFullPolicy::DropOldest;
+
+    /*
+     * ============================================================
+     * EncodedPacketTee->Mp4Record
+     * ============================================================
+     */
+    rkcam::PipelineQueueConfig encodedpacket_tee_to_mp4record;
+    encodedpacket_tee_to_mp4record.name = "encodedpacket_tee_to_mp4record";
+    encodedpacket_tee_to_mp4record.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
+    encodedpacket_tee_to_mp4record.capacity = 16;
+    encodedpacket_tee_to_mp4record.policy = rkcam::QueueFullPolicy::DropOldest;
+
+    /*
+     * ============================================================
+     * EncodedPacketTee->rtspPush
+     * ============================================================
+     */
+    rkcam::PipelineQueueConfig encodedpacket_tee_to_rtsppush;
+    encodedpacket_tee_to_rtsppush.name = "encodedpacket_tee_to_rtsppush";
+    encodedpacket_tee_to_rtsppush.value_type = rkcam::PipelineQueueValueType::EncodedPacket;
+    encodedpacket_tee_to_rtsppush.capacity = 16;
+    encodedpacket_tee_to_rtsppush.policy = rkcam::QueueFullPolicy::DropOldest;
+
+
+
 
     /*
      * ============================================================
@@ -297,7 +322,7 @@ int main()
     mpp.type = rkcam::StageType::Mpp;
     mpp.input_queue = record_to_mpp;
     mpp.output_queues = {
-        mpp_to_mp4,
+        mpp_to_encodedpacket_tee,
     };
 
     mpp.mpp.stage_name = "mpp";
@@ -312,6 +337,7 @@ int main()
     mpp.mpp.encoder.gop = gop;
     mpp.mpp.encoder.bitrate = bitrate;
 
+
     /*
      * ============================================================
      * 7. Mp4RecordStage
@@ -321,7 +347,7 @@ int main()
     rkcam::StageNodeConfig mp4_record;
     mp4_record.name = "mp4_record";
     mp4_record.type = rkcam::StageType::Mp4Record;
-    mp4_record.input_queue = mpp_to_mp4;
+    mp4_record.input_queue = encodedpacket_tee_to_mp4record;
 
     mp4_record.mp4_record.stage_name = "mp4_record";
     mp4_record.mp4_record.output_path =
@@ -335,7 +361,54 @@ int main()
 
     /*
      * ============================================================
-     * 8. 节点顺序
+     * 8. EncodedPacketTeeStageConfig
+     * ============================================================
+     */
+    rkcam::StageNodeConfig encodedPacket_tee_config;
+
+    encodedPacket_tee_config.name = "encoded_packet_tee";
+    encodedPacket_tee_config.type = rkcam::StageType::EncodedPacketTee;
+    encodedPacket_tee_config.input_queue = mpp_to_encodedpacket_tee;
+    encodedPacket_tee_config.output_queues = {
+        encodedpacket_tee_to_mp4record,
+        encodedpacket_tee_to_rtsppush,
+    };
+
+    encodedPacket_tee_config.encoded_packet_tee.stage_name = "encoded_packet_tee";
+    encodedPacket_tee_config.encoded_packet_tee.continue_on_output_fail = true;
+    encodedPacket_tee_config.encoded_packet_tee.log_interval = 30;
+
+    /*
+     * ============================================================
+     * 9. RtspPushStageConfig
+     * ============================================================
+     */
+    rkcam::RtspVideoStreamConfig rtsp_video_cfg;
+    rtsp_video_cfg.enabled = true;
+    rtsp_video_cfg.codec = rkcam::CodecType::H264;
+    rtsp_video_cfg.width = record_width;
+    rtsp_video_cfg.height = record_height;
+    rtsp_video_cfg.fps = 30;
+    rtsp_video_cfg.wait_key_frame = true;
+
+    rkcam::RtspAudioStreamConfig rtsp_audio_cfg;
+    rtsp_audio_cfg.enabled = false; 
+
+    rkcam::StageNodeConfig rtsp_push_cfg;
+    rtsp_push_cfg.name = "rtsp_push";
+    rtsp_push_cfg.type = rkcam::StageType::RtspPush;
+    rtsp_push_cfg.input_queue = encodedpacket_tee_to_rtsppush;
+
+    rtsp_push_cfg.rtsp_push.stage_name = "rtsp_push";
+    rtsp_push_cfg.rtsp_push.url = "rtsp://192.168.1.100:8554/live";
+    rtsp_push_cfg.rtsp_push.video = rtsp_video_cfg;
+    rtsp_push_cfg.rtsp_push.audio = rtsp_audio_cfg;
+    rtsp_push_cfg.rtsp_push.rtsp_over_tcp = true;
+
+
+    /*
+     * ============================================================
+     * 节点顺序
      *
      * 注意：
      *   按上游到下游写。

@@ -38,6 +38,7 @@ bool EncodedPacketTeeStage::start()
                        config_.stage_name.c_str(),
                        i);
             return false;
+        }
     }
 
 
@@ -72,7 +73,7 @@ void EncodedPacketTeeStage::threadLoop()
         
         bool pushed_to_at_least_one = false;
 
-        for(size_t i = 0; i < output_queues_size(); i++)
+        for(size_t i = 0; i < output_queues_.size(); i++)
         {
             auto* output_queue = output_queues_[i];
 

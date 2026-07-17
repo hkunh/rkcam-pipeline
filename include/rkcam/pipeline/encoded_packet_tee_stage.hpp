@@ -53,9 +53,9 @@ private:
     EncodedPacketTeeStageConfig config_;
 
     BlockingQueue<EncodedPacket>& input_queue_;
-    std:vector<BlockingQueue<EncodedPacket>*> output_queue_;
+    std::vector<BlockingQueue<EncodedPacket>*> output_queues_;
 
-    std:thread thread_;
+    std::thread thread_;
     std::atomic<bool> running_{false};
 
     int input_packets_ = 0;
