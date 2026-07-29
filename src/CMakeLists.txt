@@ -139,30 +139,63 @@ find_library(AVUTIL_LIB avutil
         "$ENV{SYSROOT}/usr/lib64"
     NO_DEFAULT_PATH
 )
+find_library(SWRESAMPLE_LIB swresample
+    PATHS
+        "$ENV{SYSROOT}/usr/lib"
+        "$ENV{SYSROOT}/usr/lib64"
+    NO_DEFAULT_PATH
+)
 
 if(NOT AVFORMAT_LIB OR NOT AVCODEC_LIB OR NOT AVUTIL_LIB)
     message(FATAL_ERROR "FFmpeg libraries not found in RK_SYSROOT")
 endif()
-
 add_library(ffmpeg::avformat SHARED IMPORTED)
 set_target_properties(ffmpeg::avformat PROPERTIES
     IMPORTED_LOCATION "${AVFORMAT_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
 )
-
 add_library(ffmpeg::avcodec SHARED IMPORTED)
 set_target_properties(ffmpeg::avcodec PROPERTIES
     IMPORTED_LOCATION "${AVCODEC_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
 )
-
 add_library(ffmpeg::avutil SHARED IMPORTED)
 set_target_properties(ffmpeg::avutil PROPERTIES
     IMPORTED_LOCATION "${AVUTIL_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
 )
+add_library(ffmpeg::swresample SHARED IMPORTED)
+set_target_properties(ffmpeg::swresample PROPERTIES
+    IMPORTED_LOCATION "${SWRESAMPLE_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "$ENV{SYSROOT}/usr/include"
+)
 
 
+# =========================
+# audio
+# =========================
+add_library(rkcam_audio_source STATIC
+    audio/alsa_audio_source.cpp
+)
+target_include_directories(rkcam_audio_source PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(rkcam_audio_source PUBLIC
+    rkcam_core
+    asound
+)
+add_library(rkcam::audio_source ALIAS rkcam_audio_source)
+
+
+add_library(rkcam_audio_encoder STATIC
+    media/aac_encoder.cpp
+)
+target_link_libraries(rkcam_audio_encoder PUBLIC
+    ffmpeg::avcodec
+    ffmpeg::avutil
+    ffmpeg::swresample
+)
+add_library(rkcam::audio_encoder ALIAS rkcam_audio_encoder)
 
 
 add_library(rkcam_pipeline
@@ -178,6 +211,8 @@ add_library(rkcam_pipeline
     pipeline/videoframe_stage.cpp
     pipeline/encoded_packet_tee_stage.cpp
     pipeline/rtsp_push_stage.cpp
+    pipeline/audio_capture_stage.cpp
+    pipeline/wav_save_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
@@ -188,6 +223,7 @@ target_link_libraries(rkcam_pipeline PUBLIC
     ffmpeg::avcodec
     ffmpeg::avutil
     rkcam::drm
+    rkcam::audio_source
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
 

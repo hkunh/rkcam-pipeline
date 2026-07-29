@@ -255,6 +255,9 @@ bool CameraPipeline::createOrReuseQueue(
         case PipelineQueueValueType::PipelineVideoFrame:
             new_queue = std::make_shared<VideoFrameQueueBox>(config.capacity, config.policy);
             break;
+        case PipelineQueueValueType::PipelineAudioFrame:
+            new_queue = std::make_shared<AudioFrameQueueBox>(config.capacity, config.policy);
+            break;
         case PipelineQueueValueType::EncodedPacket:
             new_queue = std::make_shared<EncodedPacketQueueBox>(
                 config.capacity,
@@ -663,6 +666,84 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                     out_queues.size());
 
             return true;
+        }
+        case StageType::AudioCapture:{
+            if(node.output_queues.size() != 1)
+            {
+                RKCAM_LOGE("[%s] AudioCaptureStage %s requires exactly one output queue, got=%zu",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str(),
+                        node.output_queues.size());
+                return false;
+            }
+
+            auto* out_q = getTypeQueue<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>(node.output_queues[0], node.config.name);
+            if(!out_q)
+            {
+                return false;
+            }
+
+            AudioCaptureStageConfig audio_cfg = node.config.audio_capture;
+            if (audio_cfg.stage_name.empty()) {
+                audio_cfg.stage_name = node.config.name;
+            }
+
+            if (audio_cfg.stream_id.empty()) {
+                audio_cfg.stream_id = "audio0";
+            }
+
+            /*
+            * 保持 source.stream_id 和 stage stream_id 一致。
+            */
+            if (audio_cfg.source.stream_id.empty()) {
+                audio_cfg.source.stream_id = audio_cfg.stream_id;
+            }
+
+            auto source = std::make_unique<AlsaAudioSource>(audio_cfg.source);
+            node.stage = std::make_unique<AudioCaptureStage>(audio_cfg, std::move(source), *out_q);
+
+            RKCAM_LOGI("[%s] create AudioCaptureStage: %s -> %s device=%s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.output_queues[0].name.c_str(),
+                    audio_cfg.source.device.c_str());
+
+            return true;
+
+        }
+        case StageType::WavSave: {
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] WavSaveStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            if (!node.output_queues.empty()) {
+                RKCAM_LOGE("[%s] WavSaveStage %s should not have output_queues, got=%zu",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str(),
+                        node.output_queues.size());
+                return false;
+            }
+            auto* in_q = getTypeQueue<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>(
+                node.input_queue,
+                node.config.name  
+            );
+            WavSaveStageConfig wav_cfg = node.config.wav_save;
+            if (wav_cfg.stage_name.empty()) {
+                wav_cfg.stage_name = node.config.name;
+            }
+            node.stage = std::make_unique<WavSaveStage>(wav_cfg, *in_q);
+
+            RKCAM_LOGI("[%s] create WavSaveStage: %s <- %s output=%s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str(),
+                    wav_cfg.output_path.c_str());
+
+            return true;
+
         }
         default:
             RKCAM_LOGE("[%s] unsupported stage type, stage=%s",

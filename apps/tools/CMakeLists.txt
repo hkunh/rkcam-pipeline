@@ -81,3 +81,27 @@ target_include_directories(drm_color_test PRIVATE
 target_link_libraries(drm_color_test PRIVATE
     drm
 )
+
+add_executable(audio_wav_test
+    audio_wav_test.cpp
+)
+target_link_libraries(audio_wav_test PRIVATE
+	rkcam::core
+	rkcam::pipeline
+	rkcam::video_source
+	rkcam::rga_processor
+	rkcam::drm
+)
+
+add_executable(aac_encoder_test
+    aac_encoder_test.cpp
+)
+
+target_link_libraries(aac_encoder_test PRIVATE
+    rkcam_pipeline
+    rkcam_core
+    avcodec
+    avutil
+    swresample
+    rkcam::audio_encoder
+)

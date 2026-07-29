@@ -3,7 +3,7 @@
 #include "rkcam/core/blocking_queue.hpp"
 #include "rkcam/video/video_frame.hpp"
 #include "rkcam/media/encoded_packet.hpp"
-
+#include "rkcam/audio/audio_frame.hpp"
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -13,6 +13,7 @@ namespace rkcam {
 enum class PipelineQueueValueType{
     Unknown,
     PipelineVideoFrame,
+    PipelineAudioFrame,
     EncodedPacket,
 };
 
@@ -96,7 +97,8 @@ private:
 
 };
 using VideoFrameQueueBox = PipelineQueueBox<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>;
-
+using AudioFrameQueueBox = PipelineQueueBox<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>;
 using EncodedPacketQueueBox = PipelineQueueBox<EncodedPacket, PipelineQueueValueType::EncodedPacket>;
+
 
 }

@@ -63,6 +63,16 @@ $Files = @(
         Name = "drm_color_test"
         LocalPath = Join-Path $BuildDir "apps\tools\drm_color_test"
         RemotePath = "/userdata/rkcam/bin/drm_color_test"
+    },
+    @{
+        Name = "audio_wav_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\audio_wav_test"
+        RemotePath = "/userdata/rkcam/bin/audio_wav_test"
+    },
+    @{
+        Name = "aac_encoder_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\aac_encoder_test"
+        RemotePath = "/userdata/rkcam/bin/aac_encoder_test"
     }
 )
 

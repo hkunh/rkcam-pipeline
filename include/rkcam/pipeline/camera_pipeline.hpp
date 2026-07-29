@@ -16,6 +16,10 @@
 #include "rkcam/pipeline/encoded_packet_tee_stage.hpp"
 #include "rkcam/pipeline/rtsp_push_stage.hpp"
 
+#include "rkcam/pipeline/audio_capture_stage.hpp"
+#include "rkcam/pipeline/wav_save_stage.hpp"
+
+
 #include "rkcam/video/video_frame.hpp"
 
 #include <atomic>
@@ -28,6 +32,8 @@ namespace rkcam {
 
 enum class StageType {
     Capture,
+    AudioCapture,
+    WavSave,
     Rga,
     Mpp,
     EncodedSave,
@@ -85,6 +91,9 @@ struct StageNodeConfig{
 
     VideoFrameTeeStageConfig video_frame_tee;
     EncodedPacketTeeStageConfig encoded_packet_tee;
+
+    AudioCaptureStageConfig audio_capture;
+    WavSaveStageConfig wav_save;
 
 };
 
