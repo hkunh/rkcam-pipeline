@@ -73,6 +73,11 @@ $Files = @(
         Name = "aac_encoder_test"
         LocalPath = Join-Path $BuildDir "apps\tools\aac_encoder_test"
         RemotePath = "/userdata/rkcam/bin/aac_encoder_test"
+    },
+    @{
+        Name = "audio_aac_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\audio_aac_test"
+        RemotePath = "/userdata/rkcam/bin/audio_aac_test"
     }
 )
 

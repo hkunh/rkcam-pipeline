@@ -213,17 +213,21 @@ add_library(rkcam_pipeline
     pipeline/rtsp_push_stage.cpp
     pipeline/audio_capture_stage.cpp
     pipeline/wav_save_stage.cpp
+    pipeline/aac_encode_stage.cpp
+    pipeline/aac_adts_save_stage.cpp
 )
 target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::core
     rkcam::video_frame
     rkcam::video_source
+    rkcam::rga_processor
     rkcam::mpp_processor
     ffmpeg::avformat
     ffmpeg::avcodec
     ffmpeg::avutil
     rkcam::drm
     rkcam::audio_source
+    rkcam::audio_encoder
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
 

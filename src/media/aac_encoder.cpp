@@ -509,7 +509,7 @@ bool AacEncoder::encode(
         return false;
     }
 
-    return receivePackets(packets);
+    return receivePackets(packets);  //注意：这个packets可能是空的
 }
 
 bool AacEncoder::fillAudioFrame(const PipelineAudioFrame& input_frame)

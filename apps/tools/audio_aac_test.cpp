@@ -183,10 +183,10 @@ int main(int argc, char** argv)
     aac_encode.aac_encode.encoder.input_format = rkcam::AudioSampleFormat::S16LE;
 
     aac_encode.aac_encode.encoder.output_sample_rate = 48000;
-    aac_encode.aac_encode.encoder.output_channels = 1;
+    aac_encode.aac_encode.encoder.output_channels = 2;
     aac_encode.aac_encode.encoder.bit_rate = bit_rate;
     aac_encode.aac_encode.encoder.channel_select =
-        rkcam::AudioChannelSelect::LeftToMono;
+        rkcam::AudioChannelSelect::Keep;
 
     /*
      * AacAdtsSaveStage
@@ -202,7 +202,7 @@ int main(int argc, char** argv)
     aac_save.aac_adts_save.stage_name = "aac_adts_save";
     aac_save.aac_adts_save.output_path = output_path;
     aac_save.aac_adts_save.sample_rate = 48000;
-    aac_save.aac_adts_save.channels = 1;
+    aac_save.aac_adts_save.channels = 2;
     aac_save.aac_adts_save.max_packets = 0;
     aac_save.aac_adts_save.log_interval = 50;
     aac_save.aac_adts_save.strict_packet = true;

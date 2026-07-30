@@ -745,6 +745,105 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             return true;
 
         }
+        case StageType::AacEncode:{
+            if(!node.input_queue)
+            {
+                RKCAM_LOGE("[%s] AacEncodeStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+            if (node.output_queues.size() != 1) {
+                RKCAM_LOGE("[%s] AacEncodeStage %s requires exactly one output queue, got=%zu",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str(),
+                        node.output_queues.size());
+                return false;
+            }
+            auto* in_q = getTypeQueue<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>(
+                node.input_queue,
+                node.config.name
+            );
+            if(!in_q){
+                return false;
+            }
+
+            auto* out_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(
+                node.output_queues[0],
+                node.config.name
+            );
+
+            AacEncodeStageConfig aac_cfg = node.config.aac_encode;
+
+            if(aac_cfg.stage_name.empty())
+            {
+                aac_cfg.stage_name = node.config.name;
+            }
+
+            if(aac_cfg.stream_id.empty())
+            {
+                aac_cfg.stream_id = "audio0";
+            }
+
+            if(aac_cfg.encoder.stream_id.empty())
+            {
+                aac_cfg.encoder.stream_id = aac_cfg.stream_id;
+            }
+
+            node.stage = std::make_unique<AacEncodeStage>(aac_cfg, *in_q, *out_q);
+
+            RKCAM_LOGI("[%s] create AacEncodeStage: %s %s -> %s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str(),
+                    node.config.output_queues[0].name.c_str());
+
+            return true;
+        }
+        case StageType::AacAdtsSave: {
+            if (!node.input_queue) {
+                RKCAM_LOGE("[%s] AacAdtsSaveStage %s requires input_queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                return false;
+            }
+
+            if (!node.output_queues.empty()) {
+                RKCAM_LOGE("[%s] AacAdtsSaveStage %s should not have output queues, got=%zu",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str(),
+                        node.output_queues.size());
+                return false;
+            }
+
+            auto* in_q = getTypeQueue<
+                EncodedPacket,
+                PipelineQueueValueType::EncodedPacket>(
+                    node.input_queue,
+                    node.config.name);
+
+            if (!in_q) {
+                return false;
+            }
+
+            AacAdtsSaveStageConfig save_cfg = node.config.aac_adts_save;
+
+            if (save_cfg.stage_name.empty()) {
+                save_cfg.stage_name = node.config.name;
+            }
+
+            node.stage = std::make_unique<AacAdtsSaveStage>(
+                save_cfg,
+                *in_q);
+
+            RKCAM_LOGI("[%s] create AacAdtsSaveStage: %s <- %s output=%s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.config.input_queue.name.c_str(),
+                    save_cfg.output_path.c_str());
+
+            return true;
+        }
         default:
             RKCAM_LOGE("[%s] unsupported stage type, stage=%s",
                    config_.stream_id.c_str(),

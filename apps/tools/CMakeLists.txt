@@ -96,7 +96,6 @@ target_link_libraries(audio_wav_test PRIVATE
 add_executable(aac_encoder_test
     aac_encoder_test.cpp
 )
-
 target_link_libraries(aac_encoder_test PRIVATE
     rkcam_pipeline
     rkcam_core
@@ -104,4 +103,15 @@ target_link_libraries(aac_encoder_test PRIVATE
     avutil
     swresample
     rkcam::audio_encoder
+)
+
+add_executable(audio_aac_test
+    audio_aac_test.cpp
+)
+target_link_libraries(audio_aac_test PRIVATE
+	rkcam::core
+	rkcam::pipeline
+	rkcam::video_source
+	rkcam::rga_processor
+	rkcam::drm
 )

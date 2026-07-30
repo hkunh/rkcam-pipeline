@@ -18,7 +18,8 @@
 
 #include "rkcam/pipeline/audio_capture_stage.hpp"
 #include "rkcam/pipeline/wav_save_stage.hpp"
-
+#include "rkcam/pipeline/aac_encode_stage.hpp"
+#include "rkcam/pipeline/aac_adts_save_stage.hpp"
 
 #include "rkcam/video/video_frame.hpp"
 
@@ -34,6 +35,9 @@ enum class StageType {
     Capture,
     AudioCapture,
     WavSave,
+    AacEncode,
+    AacAdtsSave,
+
     Rga,
     Mpp,
     EncodedSave,
@@ -94,6 +98,8 @@ struct StageNodeConfig{
 
     AudioCaptureStageConfig audio_capture;
     WavSaveStageConfig wav_save;
+    AacEncodeStageConfig aac_encode;
+    AacAdtsSaveStageConfig aac_adts_save;
 
 };
 
