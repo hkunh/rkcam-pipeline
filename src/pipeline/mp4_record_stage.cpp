@@ -787,6 +787,7 @@ bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
 
     /*
      * 必须从第一帧可独立解码的 IDR 开始。
+     * 这里限制一帧内必须同时包含sps pps idr
      */
     if (!packet.key_frame &&!hasIdrNal(packet)) {
         return true;
@@ -891,7 +892,7 @@ bool Mp4RecordStage::flushAudioPackets(EncodedPacket&& first_video_packet)
          * 录像以第一帧视频为起点。
          * 起点之前的音频不写入。
          */
-        if (audio_pts_us < first_pts_us_ + 10) {   //实际测试30fps下，音频快一帧，这里10us让音频慢一些
+        if (audio_pts_us < first_pts_us_ ) {   //实际测试30fps下，音频快一帧视频帧，这里要修复的话，得对全部音频和pts和dts加偏移修正
             ++dropped_audio_before_header_;
 
             continue;
