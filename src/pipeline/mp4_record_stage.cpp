@@ -200,6 +200,44 @@ bool buildAnnexBExtradata(const std::vector<uint8_t>& sps, const std::vector<uin
     return true;
 }
 
+static bool hasIdrNal(const EncodedPacket& packet)
+{
+    if (!packet.data() || packet.size() == 0) {
+        return false;
+    }
+    std::vector<NalUnit> nals;
+    if(!splitAnnexBNals(packet.data(), packet.size(), nals))
+    {
+        return false;
+    }
+    for(const auto& nal : nals)
+    {
+        if (!nal.data || nal.size == 0) {
+            continue;
+        }
+        const uint8_t nal_header = nal.data[0];
+        /*
+         * forbidden_zero_bit 必须为 0。
+         * 为 1 说明码流头异常。
+         */
+        if((nal_header & 0x80) != 0)
+        {
+            continue;
+        }
+
+        const uint8_t nal_type = nal_header & 0x1f;
+        /*
+         * H.264:
+         * type 5 = coded slice of an IDR picture
+         */
+        if(nal_type == 5)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 static int64_t channelLayoutForChannels(int channels)
 {
     if(channels == 1)
@@ -713,7 +751,7 @@ bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
      * 视频配置完整时，可以由第一包任意媒体 packet
      * 确定起始时间并直接初始化。
      */
-    if(!config_.video.enabled || !config_.video.extradata.empty())
+    if(!config_.video.enabled)
     {
         const int64_t start_pts_us = packet.pts_us >= 0 ? packet.pts_us : 0;
         if(!initMuxerWithVideoExtradata(config_.video.extradata, start_pts_us))  //在函数内部会验证是否有开启video
@@ -746,8 +784,28 @@ bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
         packet.codec != CodecType::H264) {
         return false;
     }
-    return initializeFromFirstVideoPacket(std::move(packet));
 
+    /*
+     * 必须从第一帧可独立解码的 IDR 开始。
+     */
+    if (!packet.key_frame &&!hasIdrNal(packet)) {
+        return true;
+    }
+
+    std::vector<uint8_t> extradata = config_.video.extradata;
+    if(extradata.empty())
+    {
+        return initializeFromFirstVideoPacket(std::move(packet));
+    }
+    else{
+        const int64_t start_pts = std::max<int64_t>(0, packet.pts_us);
+        if (!initMuxerWithVideoExtradata(
+                extradata,
+                start_pts)) {
+            return false;
+        }
+        return flushAudioPackets(std::move(packet));
+    }
 
 }
 bool Mp4RecordStage::initializeFromFirstVideoPacket(EncodedPacket&& video_packet)
@@ -833,7 +891,7 @@ bool Mp4RecordStage::flushAudioPackets(EncodedPacket&& first_video_packet)
          * 录像以第一帧视频为起点。
          * 起点之前的音频不写入。
          */
-        if (audio_pts_us < first_pts_us_) {
+        if (audio_pts_us < first_pts_us_ + 10) {   //实际测试30fps下，音频快一帧，这里10us让音频慢一些
             ++dropped_audio_before_header_;
 
             continue;
