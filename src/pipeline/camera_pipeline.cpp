@@ -49,7 +49,24 @@ std::shared_ptr<IPipelineQueue> getSingleOutputQueue(
 
     return node.output_queues[0];
 }
+std::shared_ptr<IPipelineQueue> getSingleInputQueue(
+    const StageNode& node,
+    const std::string& stream_id)
+{
+    if (node.input_queues.size() != 1) {
+        RKCAM_LOGE(
+            "[%s] stage %s requires exactly one input queue, got=%zu",
+            stream_id.c_str(),
+            node.config.name.c_str(),
+            node.input_queues.size());
+
+        return nullptr;
+    }
+
+    return node.input_queues[0];
 }
+
+}//namespace
 
 
 
@@ -181,18 +198,30 @@ bool CameraPipeline::initStageNodeQueues()
     for(auto& node : nodes_)
     {
         /*
-        * 初始化 input queue。
-        * Capture 这类 source stage 可以没有 input queue。
-        */
-        if(node.config.input_queue.valid())
-        {
-            if(!createOrReuseQueue(node.config.input_queue, node.input_queue)){
-                RKCAM_LOGE("[%s] create input queue failed, stage=%s queue=%s",
-                           config_.stream_id.c_str(),
-                           node.config.name.c_str(),
-                           node.config.input_queue.name.c_str());
+         * 初始化所有输入队列。
+         */
+        node.input_queues.clear();
+        for (const auto& queue_cfg : node.config.input_queues) {
+            if (!queue_cfg.valid()) {
+                RKCAM_LOGE(
+                    "[%s] node %s has invalid input queue config",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str());
                 return false;
             }
+
+            std::shared_ptr<IPipelineQueue> queue;
+
+            if (!createOrReuseQueue(queue_cfg, queue)) {
+                RKCAM_LOGE(
+                    "[%s] create input queue failed: "
+                    "stage=%s queue=%s",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    queue_cfg.name.c_str());
+                return false;
+            }
+            node.input_queues.push_back(std::move(queue));
         }
 
         node.output_queues.clear();
@@ -332,12 +361,13 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             return true;    
         }
         case StageType::Rga:{
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto output_box = getSingleOutputQueue(node, config_.stream_id);
-            if (!output_box) {
+            if (!input_box || !output_box) {
                 return false;
             }
             auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(
-                node.input_queue,
+                input_box,
                 node.config.name
             );
             auto* out_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(
@@ -361,16 +391,17 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create RgaStage: %s %s -> %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str(),
+                    node.config.input_queues[0].name.c_str(),
                     node.config.output_queues[0].name.c_str());
 
             return true;
         }
         case StageType::Fps: {
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<
                 PipelineVideoFrame,
                 PipelineQueueValueType::PipelineVideoFrame>(
-                    node.input_queue,
+                    input_box,
                     node.config.name);
 
             if (!in_q) {
@@ -393,14 +424,15 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create FpsStage: %s <- %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str());
+                    node.config.input_queues[0].name.c_str());
             return true;
         }
         case StageType::RawSave: {
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<
                 PipelineVideoFrame,
                 PipelineQueueValueType::PipelineVideoFrame>(
-                    node.input_queue,
+                    input_box,
                     node.config.name);
 
             if (!in_q) {
@@ -423,16 +455,17 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create RawSaveStage: %s <- %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str());
+                    node.config.input_queues[0].name.c_str());
 
             return true;
         }
         case StageType::Mpp:{
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto output_box = getSingleOutputQueue(node, config_.stream_id);
-            if (!output_box) {
+            if (!input_box || !output_box) {
                 return false;
             }
-            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(node.input_queue, node.config.name);
+            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(input_box, node.config.name);
             auto* out_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(output_box, node.config.name);
             if (!in_q || !out_q) {
                 RKCAM_LOGE("[%s] MppStage %s requires PipelineVideoFrame input and EncodedPacket output",
@@ -449,17 +482,18 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 RKCAM_LOGI("[%s] create MppStage: %s %s -> %s",
                config_.stream_id.c_str(),
                node.config.name.c_str(),
-               node.config.input_queue.name.c_str(),
+               node.config.input_queues[0].name.c_str(),
                node.config.output_queues[0].name.c_str());
 
             return true;
 
         }
         case StageType::EncodedSave: {
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<
                 EncodedPacket,
                 PipelineQueueValueType::EncodedPacket>(
-                    node.input_queue,
+                    input_box,
                     node.config.name);
 
             if (!in_q) {
@@ -482,40 +516,108 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create EncodedSaveStage: %s <- %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str());
+                    node.config.input_queues[0].name.c_str());
 
             return true;
         }
         case StageType::Mp4Record:{
-            auto * in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queue, node.config.name.c_str());
-            if (!in_q) {
-                RKCAM_LOGE("[%s] Mp4RecordStage %s requires EncodedPacket input_queue",
-                        config_.stream_id.c_str(),
-                        node.config.name.c_str());
+            if (!node.output_queues.empty()) {
+                RKCAM_LOGE(
+                    "[%s] Mp4RecordStage %s should not have output queues, got=%zu",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.output_queues.size());
                 return false;
             }
 
-            Mp4RecordStageConfig mp4_cfg = node.config.mp4_record;
+            Mp4RecordStageConfig mp4_cfg =
+                node.config.mp4_record;
+
             if (mp4_cfg.stage_name.empty()) {
-                mp4_cfg.stage_name = node.config.name;
+                mp4_cfg.stage_name =
+                    node.config.name;
             }
 
-            node.stage = std::make_unique<Mp4RecordStage>(mp4_cfg, *in_q);
+            const size_t expected_input_count =
+                static_cast<size_t>(mp4_cfg.video.enabled ? 1 : 0) +
+                static_cast<size_t>(mp4_cfg.audio.enabled ? 1 : 0);
 
-            RKCAM_LOGI("[%s] create Mp4RecordStage: %s <- %s",
+            if (node.input_queues.size() != expected_input_count) {
+                RKCAM_LOGE(
+                    "[%s] Mp4RecordStage %s requires %zu input queues, got=%zu",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str());
+                    expected_input_count,
+                    node.input_queues.size());
+                return false;
+            }
+            std::vector<EncodedPacketInputPort> ports;
+            ports.reserve(expected_input_count);
+
+            size_t input_index = 0;
+            /*
+            * 约定：
+            *   视频输入在前，音频输入在后。
+            */
+            if(mp4_cfg.video.enabled)
+            {
+                auto* video_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queues[input_index], node.config.name);
+                if(!video_q)
+                {
+                    RKCAM_LOGE(
+                        "[%s] Mp4RecordStage %s video input "
+                        "requires EncodedPacket queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                    return false;
+                }
+                EncodedPacketInputPort video_port;
+                video_port.port_name = "video";
+                video_port.stream_id = mp4_cfg.video.stream_id;
+                video_port.media_type = MediaType::Video;
+                video_port.codec = mp4_cfg.video.codec;
+                video_port.queue = video_q;
+                video_port.required = true;
+                ports.push_back(std::move(video_port));
+                ++input_index;
+            }
+            if(mp4_cfg.audio.enabled)
+            {
+                auto* audio_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queues[input_index], node.config.name);
+                if (!audio_q) {
+                    RKCAM_LOGE(
+                        "[%s] Mp4RecordStage %s audio input "
+                        "requires EncodedPacket queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                    return false;
+                }
+                EncodedPacketInputPort audio_port;
+                audio_port.port_name = "audio";
+                audio_port.stream_id = mp4_cfg.audio.stream_id;
+                audio_port.media_type = MediaType::Audio;
+                audio_port.codec = mp4_cfg.audio.codec;
+                audio_port.queue = audio_q;
+                audio_port.required = true;
+
+                ports.push_back(std::move(audio_port));
+                ++input_index;
+            }
+            node.stage = std::make_unique<Mp4RecordStage>(mp4_cfg, ports);
+
+            RKCAM_LOGI(
+                "[%s] create Mp4RecordStage: %s "
+                "inputs=%zu video=%d audio=%d output=%s",
+                config_.stream_id.c_str(),
+                node.config.name.c_str(),
+                ports.size(),
+                mp4_cfg.video.enabled ? 1 : 0,
+                mp4_cfg.audio.enabled ? 1 : 0,
+                mp4_cfg.output_path.c_str());
 
             return true;
         }
         case StageType::RtspPush:{
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] RtspPushStage %s requires input_queue",
-                        config_.stream_id.c_str(),
-                        node.config.name.c_str());
-                return false;
-            }
             if (!node.output_queues.empty()) {
                 RKCAM_LOGE("[%s] RtspPushStage %s should not have output_queues, got=%zu",
                         config_.stream_id.c_str(),
@@ -523,7 +625,8 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                         node.output_queues.size());
                 return false;
             }
-            auto* in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queue, node.config.name);
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
+            auto* in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(input_box, node.config.name);
             if (!in_q) {
                 return false;
             }
@@ -535,20 +638,14 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create RtspPushStage: %s <- %s url=%s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str(),
+                    node.config.input_queues[0].name.c_str(),
                     rtsp_cfg.url.c_str());
 
             return true;
         }
         case StageType::Display:{
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] DisplayStage %s requires input_queue",
-                        config_.stream_id.c_str(),
-                        node.config.name.c_str());
-                return false;
-            }
-            
-            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(node.input_queue, node.config.name);
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
+            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(input_box, node.config.name);
             if (!in_q) {
                 return false;
             }
@@ -563,26 +660,26 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create DisplayStage: %s <- %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str());
+                    node.config.input_queues[0].name.c_str());
 
             return true;
         }
         case StageType::VideoFrameTee:{
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] VideoFrameTeeStage %s requires input_queue",
+            
+            if (node.input_queues.empty()) {
+                RKCAM_LOGE("[%s] VideoFrameTeeStage %s requires input_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
             }
-
             if (node.output_queues.empty()) {
                 RKCAM_LOGE("[%s] VideoFrameTeeStage %s requires output_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
             }
-
-            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(node.input_queue, node.config.name);
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
+            auto* in_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(input_box, node.config.name);
             if (!in_q) {
                 return false;
             }
@@ -610,8 +707,8 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             return true;
         }
         case StageType::EncodedPacketTee: {
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] EncodedPacketTeeStage %s requires input_queue",
+            if (node.input_queues.empty()) {
+                RKCAM_LOGE("[%s] EncodedPacketTeeStage %s requires input_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
@@ -623,11 +720,11 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                         node.config.name.c_str());
                 return false;
             }
-
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<
                 EncodedPacket,
                 PipelineQueueValueType::EncodedPacket>(
-                    node.input_queue,
+                    input_box,
                     node.config.name);
 
             if (!in_q) {
@@ -712,8 +809,8 @@ bool CameraPipeline::createStageForNode(StageNode& node)
 
         }
         case StageType::WavSave: {
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] WavSaveStage %s requires input_queue",
+            if (node.input_queues.empty()) {
+                RKCAM_LOGE("[%s] WavSaveStage %s requires input_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
@@ -726,8 +823,9 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                         node.output_queues.size());
                 return false;
             }
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>(
-                node.input_queue,
+                input_box,
                 node.config.name  
             );
             WavSaveStageConfig wav_cfg = node.config.wav_save;
@@ -739,16 +837,16 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create WavSaveStage: %s <- %s output=%s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str(),
+                    node.config.input_queues[0].name.c_str(),
                     wav_cfg.output_path.c_str());
 
             return true;
 
         }
         case StageType::AacEncode:{
-            if(!node.input_queue)
+            if(node.input_queues.empty())
             {
-                RKCAM_LOGE("[%s] AacEncodeStage %s requires input_queue",
+                RKCAM_LOGE("[%s] AacEncodeStage %s requires input_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
@@ -760,8 +858,9 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                         node.output_queues.size());
                 return false;
             }
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<PipelineAudioFrame, PipelineQueueValueType::PipelineAudioFrame>(
-                node.input_queue,
+                input_box,
                 node.config.name
             );
             if(!in_q){
@@ -795,14 +894,14 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create AacEncodeStage: %s %s -> %s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str(),
+                    node.config.input_queues[0].name.c_str(),
                     node.config.output_queues[0].name.c_str());
 
             return true;
         }
         case StageType::AacAdtsSave: {
-            if (!node.input_queue) {
-                RKCAM_LOGE("[%s] AacAdtsSaveStage %s requires input_queue",
+            if (node.input_queues.empty()) {
+                RKCAM_LOGE("[%s] AacAdtsSaveStage %s requires input_queues",
                         config_.stream_id.c_str(),
                         node.config.name.c_str());
                 return false;
@@ -815,11 +914,11 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                         node.output_queues.size());
                 return false;
             }
-
+            auto input_box = getSingleInputQueue(node, config_.stream_id);
             auto* in_q = getTypeQueue<
                 EncodedPacket,
                 PipelineQueueValueType::EncodedPacket>(
-                    node.input_queue,
+                    input_box,
                     node.config.name);
 
             if (!in_q) {
@@ -839,7 +938,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             RKCAM_LOGI("[%s] create AacAdtsSaveStage: %s <- %s output=%s",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queue.name.c_str(),
+                    node.config.input_queues[0].name.c_str(),
                     save_cfg.output_path.c_str());
 
             return true;
@@ -915,7 +1014,7 @@ void CameraPipeline::clearAllQueues(){
 void CameraPipeline::destroy(){
     for (auto& node : nodes_) {
         node.stage.reset();
-        node.input_queue.reset();
+        node.input_queues.clear();
 
         node.output_queues.clear();
         

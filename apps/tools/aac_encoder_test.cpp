@@ -166,7 +166,7 @@ int main(int argc, char** argv)
     rkcam::StageNodeConfig aac_encode;
     aac_encode.name = "aac_encode";
     aac_encode.type = rkcam::StageType::AacEncode;
-    aac_encode.input_queue = audio_to_aac;
+    aac_encode.input_queues[0] = audio_to_aac;
     aac_encode.output_queues = {
         aac_to_save,
     };
@@ -197,7 +197,7 @@ int main(int argc, char** argv)
     rkcam::StageNodeConfig aac_save;
     aac_save.name = "aac_adts_save";
     aac_save.type = rkcam::StageType::AacAdtsSave;
-    aac_save.input_queue = aac_to_save;
+    aac_save.input_queues[0] = aac_to_save;
 
     aac_save.aac_adts_save.stage_name = "aac_adts_save";
     aac_save.aac_adts_save.output_path = output_path;

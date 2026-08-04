@@ -18,10 +18,28 @@ extern "C" {
 #include <memory>
 #include <utility>
 #include <vector>
-
+#include <time.h>
 namespace rkcam {
 namespace {
+int64_t nowUs()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
 
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000LL +
+           static_cast<uint64_t>(ts.tv_nsec) / 1000LL;
+
+}
+
+static void printHexPrintf(const char* name, const std::vector<uint8_t>& data)
+{
+    printf("%s (%zu bytes): ", name, data.size());
+    for(uint8_t b : data)
+    {
+        printf("%02X ", b);
+    }
+    printf("\n");
+}
 struct NalUnit{
 
     const uint8_t* data = nullptr;
@@ -137,6 +155,7 @@ static bool extractSpsPpsFromAnnexB(const EncodedPacket& packet,
                                 std::vector<uint8_t>& sps,
                                 std::vector<uint8_t>& pps)
 {
+    // printf("extractSpsPpsFromAnnexBextractSpsPpsFromAnnexBextractSpsPpsFromAnnexB\n");
     sps.clear();
     pps.clear();
     std::vector<NalUnit> nals;
@@ -170,6 +189,10 @@ static bool extractSpsPpsFromAnnexB(const EncodedPacket& packet,
         }
 
     }
+    // ================= 【添加打印代码】 =================
+    // printHexPrintf("SPS", sps);
+    // printHexPrintf("PPS", pps);
+    // ====================================================
     return !sps.empty() && !pps.empty();
 
 }
@@ -207,6 +230,8 @@ static bool hasIdrNal(const EncodedPacket& packet)
  * 1. 这是一个非流式(Out-of-band)的全局配置记录，用于初始化解码器。
  * 2. 它是 MP4、FLV/RTMP、RTSP(用于SDP生成)等规范强制要求的初始化头。
  */
+
+//这里没有用到， mpp输出的是annexb的h264
 static bool buildAvccExtradata(const std::vector<uint8_t>& sps,
                                const std::vector<uint8_t>& pps,
                                std::vector<uint8_t>& extradata)
@@ -302,7 +327,38 @@ static bool buildAvccExtradata(const std::vector<uint8_t>& sps,
 
     return true;
 }
+static void appendStartCode4(std::vector<uint8_t>& out)
+{
+    out.push_back(0x00);
+    out.push_back(0x00);
+    out.push_back(0x00);
+    out.push_back(0x01);
+}
 
+static bool buildAnnexBExtradata(
+    const std::vector<uint8_t>& sps,
+    const std::vector<uint8_t>& pps,
+    std::vector<uint8_t>& extradata
+)
+{
+    extradata.clear();
+    if (sps.empty() || pps.empty()) {
+        return false;
+    }
+    /*
+     * 00 00 00 01 SPS
+     */
+    appendStartCode4(extradata);
+    extradata.insert(extradata.end(), sps.begin(), sps.end());
+    /*
+     * 00 00 00 01 PPS
+     */
+    appendStartCode4(extradata);
+    extradata.insert(extradata.end(), pps.begin(), pps.end());
+    return true;
+
+
+}
 
 static AVCodecID ffmpegCodecIdFromCodec(CodecType codec)
 {
@@ -315,6 +371,30 @@ static AVCodecID ffmpegCodecIdFromCodec(CodecType codec)
         return AV_CODEC_ID_NONE;
     }
 }
+static void dumpPacketHead(const std::string& stage_name, int packet_index, const EncodedPacket& packet)
+{
+    if (!packet.data() || packet.size() == 0) {
+        return;
+    }
+    const size_t dump_size = std::min<size_t>(packet.size(), 16);
+    std::string line;
+    char temp[8] {};
+    for(size_t i = 0; i < dump_size; ++i)
+    {
+        std::snprintf(temp, sizeof(temp), "%02X ", packet.data()[i]);
+        line += temp;
+    }
+    RKCAM_LOGI(
+        "[%s] packet[%d] size=%zu key=%d head=%s",
+        stage_name.c_str(),
+        packet_index,
+        packet.size(),
+        packet.key_frame ? 1 : 0,
+        line.c_str());
+
+}
+
+
 }//namespace
 
 
@@ -499,6 +579,12 @@ void RtspPushStage::threadLoop()
                 continue;
             }
         }
+        // if (input_packets_ <= 10) {
+        //     dumpPacketHead(
+        //         config_.stage_name,
+        //         input_packets_,
+        //         packet);
+        // }
 
         if(!writePacket(packet))
         {
@@ -517,7 +603,10 @@ void RtspPushStage::threadLoop()
 
         if (config_.log_interval > 0 &&
             pushed_packets_ % config_.log_interval == 0) {
-            RKCAM_LOGI("[%s] pushed_packets=%d stream=%s media=%d codec=%d pts=%lld size=%zu key=%d",
+            int64_t nowstamp_us = nowUs();
+            const int64_t latency_us = nowstamp_us - packet.pts_us;
+
+            RKCAM_LOGI("[%s] pushed_packets=%d stream=%s media=%d codec=%d pts=%lld size=%zu key=%d nowstamp_us=%lld packet_latency_us=%lld",
                        config_.stage_name.c_str(),
                        pushed_packets_,
                        packet.stream_id.c_str(),
@@ -525,7 +614,9 @@ void RtspPushStage::threadLoop()
                        static_cast<int>(packet.codec),
                        static_cast<long long>(packet.pts_us),
                        packet.size(),
-                       packet.key_frame ? 1 : 0);
+                       packet.key_frame ? 1 : 0,
+                       static_cast<long long>(nowstamp_us),
+                       static_cast<long long>(latency_us));
         }
     }
 
@@ -627,7 +718,7 @@ bool RtspPushStage::createVideoStreamFromH264(
         return false;
     }
     std::vector<uint8_t> extradata;
-    if(!buildAvccExtradata(sps, pps, extradata))
+    if(!buildAnnexBExtradata(sps, pps, extradata))
     {
         RKCAM_LOGE("[%s] buildAvccExtradata failed",
                    config_.stage_name.c_str());
@@ -884,6 +975,7 @@ bool RtspPushStage::writeAvPacket(
     }
 
     const int ret = av_interleaved_write_frame(fmt_ctx_, &avpkt);
+    // const int ret = av_write_frame(fmt_ctx_, &avpkt);
     if(ret < 0)
     {
         /*

@@ -56,13 +56,18 @@ struct StageNodeConfig{
     StageType type = StageType::Capture;
 
     /*
-     * input_queue:
-     *   Capture 这种 source stage 可以为空。
+     * 所有输入统一使用数组。
      *
-     * output_queues:
-     *   RawSave / Fps 这种 sink stage 可以为空。
+     * source stage:
+     *   input_queues = {};
+     *
+     * 普通单输入 stage:
+     *   input_queues = { input };
+     *
+     * 多输入 stage:
+     *   input_queues = { video_input, audio_input };
      */
-    PipelineQueueConfig input_queue;
+    std::vector<PipelineQueueConfig> input_queues;
     /*
      * 所有输出统一使用数组。
      *
@@ -106,7 +111,7 @@ struct StageNodeConfig{
 struct StageNode{
     StageNodeConfig config;
 
-    std::shared_ptr<IPipelineQueue> input_queue;
+    std::vector<std::shared_ptr<IPipelineQueue>> input_queues;
     std::unique_ptr<IStage> stage;
     std::vector<std::shared_ptr<IPipelineQueue>> output_queues;
 };

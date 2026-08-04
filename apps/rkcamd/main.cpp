@@ -64,6 +64,10 @@ int main()
     const int bitrate = 2 * 1000 * 1000;
     const int gop = 30;
 
+    const int audio_sample_rate = 48000;
+    const int audio_channels = 2;
+    const int audio_bitrate = 64000;
+    const int audio_period_size = 1024;
     /*
      * ============================================================
      * 1. 队列定义
@@ -151,7 +155,30 @@ int main()
     encodedpacket_tee_to_rtsppush.policy = rkcam::QueueFullPolicy::DropOldest;
 
 
+    /*
+    * AudioCapture -> AacEncode
+    */
+    rkcam::PipelineQueueConfig audio_to_aac;
+    audio_to_aac.name = "audio_to_aac";
+    audio_to_aac.value_type =
+        rkcam::PipelineQueueValueType::PipelineAudioFrame;
+    audio_to_aac.capacity = 16;
+    audio_to_aac.policy = rkcam::QueueFullPolicy::DropOldest;
 
+    /*
+    * AacEncode -> Mp4Record audio input
+    */
+    rkcam::PipelineQueueConfig aac_to_mp4record;
+    aac_to_mp4record.name = "aac_to_mp4record";
+    aac_to_mp4record.value_type =
+        rkcam::PipelineQueueValueType::EncodedPacket;
+    aac_to_mp4record.capacity = 32;
+
+    /*
+    * 录像编码包原则上不应丢。
+    * 如果你的 BlockingQueue 已实现 Block，就使用 Block。
+    */
+    aac_to_mp4record.policy = rkcam::QueueFullPolicy::Block;
 
     /*
      * ============================================================
@@ -191,7 +218,7 @@ int main()
     rkcam::StageNodeConfig tee;
     tee.name = "video_tee";
     tee.type = rkcam::StageType::VideoFrameTee;
-    tee.input_queue = cap_to_tee;
+    tee.input_queues = {cap_to_tee};
     tee.output_queues = {
         tee_to_preview,
         tee_to_record,
@@ -210,7 +237,7 @@ int main()
     rkcam::StageNodeConfig preview_rga;
     preview_rga.name = "preview_rga";
     preview_rga.type = rkcam::StageType::Rga;
-    preview_rga.input_queue = tee_to_preview;
+    preview_rga.input_queues = {tee_to_preview};
     preview_rga.output_queues = {
         preview_to_display,
     };
@@ -245,7 +272,7 @@ int main()
     rkcam::StageNodeConfig display;
     display.name = "display";
     display.type = rkcam::StageType::Display;
-    display.input_queue = preview_to_display;
+    display.input_queues = {preview_to_display};
 
     display.display.stage_name = "display";
     display.display.max_failed_frames = 30;
@@ -283,7 +310,7 @@ int main()
     rkcam::StageNodeConfig record_rga;
     record_rga.name = "record_rga";
     record_rga.type = rkcam::StageType::Rga;
-    record_rga.input_queue = tee_to_record;
+    record_rga.input_queues = {tee_to_record};
     record_rga.output_queues = {
         record_to_mpp,
     };
@@ -320,7 +347,7 @@ int main()
     rkcam::StageNodeConfig mpp;
     mpp.name = "mpp";
     mpp.type = rkcam::StageType::Mpp;
-    mpp.input_queue = record_to_mpp;
+    mpp.input_queues = {record_to_mpp};
     mpp.output_queues = {
         mpp_to_encodedpacket_tee,
     };
@@ -343,20 +370,58 @@ int main()
      * 7. Mp4RecordStage
      * ============================================================
      */
-
     rkcam::StageNodeConfig mp4_record;
     mp4_record.name = "mp4_record";
     mp4_record.type = rkcam::StageType::Mp4Record;
-    mp4_record.input_queue = encodedpacket_tee_to_mp4record;
-
+    mp4_record.input_queues = {
+        encodedpacket_tee_to_mp4record,
+        aac_to_mp4record,
+    };
     mp4_record.mp4_record.stage_name = "mp4_record";
     mp4_record.mp4_record.output_path =
         "/userdata/rkcam/output/preview_record_test.mp4";
 
-    mp4_record.mp4_record.width = record_width;
-    mp4_record.mp4_record.height = record_height;
-    mp4_record.mp4_record.fps = fps;
-    mp4_record.mp4_record.codec = rkcam::CodecType::H264;
+    /*
+    * Video stream.
+    */
+    mp4_record.mp4_record.video.enabled = true;
+    mp4_record.mp4_record.video.stream_id = "cam0";
+    mp4_record.mp4_record.video.codec =
+        rkcam::CodecType::H264;
+    mp4_record.mp4_record.video.width = record_width;
+    mp4_record.mp4_record.video.height = record_height;
+    mp4_record.mp4_record.video.fps = fps;
+    mp4_record.mp4_record.video.bit_rate = bitrate;
+
+    /*
+    * 当前为空：
+    * Mp4RecordStage 从第一包带 SPS/PPS 的 H264 packet 获取。
+    */
+    mp4_record.mp4_record.video.extradata.clear();
+
+    /*
+    * Audio stream.
+    */
+    mp4_record.mp4_record.audio.enabled = true;
+    mp4_record.mp4_record.audio.stream_id = "audio0";
+    mp4_record.mp4_record.audio.codec =
+        rkcam::CodecType::AAC;
+    mp4_record.mp4_record.audio.sample_rate =
+        audio_sample_rate;
+    mp4_record.mp4_record.audio.channels =
+        audio_channels;
+    mp4_record.mp4_record.audio.bit_rate =
+        audio_bitrate;
+
+    /*
+    * 当前为空：
+    * Mp4RecordStage 根据 AAC-LC / 48kHz / 2ch 自动生成 ASC。
+    */
+    mp4_record.mp4_record.audio.extradata.clear();
+
+    mp4_record.mp4_record.internal_queue_capacity = 256;
+    mp4_record.mp4_record.max_pending_audio_packets = 128;
+    mp4_record.mp4_record.log_interval = 30;
 
 
     /*
@@ -368,7 +433,7 @@ int main()
 
     encodedPacket_tee_config.name = "encoded_packet_tee";
     encodedPacket_tee_config.type = rkcam::StageType::EncodedPacketTee;
-    encodedPacket_tee_config.input_queue = mpp_to_encodedpacket_tee;
+    encodedPacket_tee_config.input_queues = {mpp_to_encodedpacket_tee};
     encodedPacket_tee_config.output_queues = {
         encodedpacket_tee_to_mp4record,
         encodedpacket_tee_to_rtsppush,
@@ -397,15 +462,86 @@ int main()
     rkcam::StageNodeConfig rtsp_push_cfg;
     rtsp_push_cfg.name = "rtsp_push";
     rtsp_push_cfg.type = rkcam::StageType::RtspPush;
-    rtsp_push_cfg.input_queue = encodedpacket_tee_to_rtsppush;
+    rtsp_push_cfg.input_queues = {encodedpacket_tee_to_rtsppush};
 
     rtsp_push_cfg.rtsp_push.stage_name = "rtsp_push";
-    rtsp_push_cfg.rtsp_push.url = "rtsp://192.168.1.100:8554/live";
+    rtsp_push_cfg.rtsp_push.url = "rtsp://192.168.56.100:8554/live";
     rtsp_push_cfg.rtsp_push.video = rtsp_video_cfg;
     rtsp_push_cfg.rtsp_push.audio = rtsp_audio_cfg;
     rtsp_push_cfg.rtsp_push.rtsp_over_tcp = true;
 
+    /*
+    * ============================================================
+    * AudioCaptureStage
+    * ============================================================
+    */
+    rkcam::StageNodeConfig audio_capture;
+    audio_capture.name = "audio_capture";
+    audio_capture.type = rkcam::StageType::AudioCapture;
+    audio_capture.output_queues = {
+        audio_to_aac,
+    };
 
+    audio_capture.audio_capture.stage_name = "audio_capture";
+    audio_capture.audio_capture.stream_id = "audio0";
+    audio_capture.audio_capture.max_frames = 0;
+    audio_capture.audio_capture.log_interval = 50;
+
+    audio_capture.audio_capture.source.device = "hw:0,0";
+    audio_capture.audio_capture.source.stream_id = "audio0";
+    audio_capture.audio_capture.source.sample_rate = audio_sample_rate;
+    audio_capture.audio_capture.source.channels = audio_channels;
+    audio_capture.audio_capture.source.format =
+        rkcam::AudioSampleFormat::S16LE;
+    audio_capture.audio_capture.source.period_size =
+        audio_period_size;
+    audio_capture.audio_capture.source.periods = 4;
+    audio_capture.audio_capture.source.allow_partial_read = false;
+    /*
+    * ============================================================
+    * AacEncodeStage
+    *
+    * S16_LE / 48000 / 2ch
+    *     -> AAC-LC / 48000 / 2ch
+    * ============================================================
+    */
+    rkcam::StageNodeConfig aac_encode;
+    aac_encode.name = "aac_encode";
+    aac_encode.type = rkcam::StageType::AacEncode;
+    aac_encode.input_queues = {
+        audio_to_aac,
+    };
+    aac_encode.output_queues = {
+        aac_to_mp4record,
+    };
+
+    aac_encode.aac_encode.stage_name = "aac_encode";
+    aac_encode.aac_encode.stream_id = "audio0";
+    aac_encode.aac_encode.max_frames = 0;
+    aac_encode.aac_encode.log_interval = 50;
+    aac_encode.aac_encode.max_encode_failures = 20;
+
+    aac_encode.aac_encode.encoder.stream_id = "audio0";
+
+    aac_encode.aac_encode.encoder.input_sample_rate =
+        audio_sample_rate;
+    aac_encode.aac_encode.encoder.input_channels =
+        audio_channels;
+    aac_encode.aac_encode.encoder.input_format =
+        rkcam::AudioSampleFormat::S16LE;
+
+    aac_encode.aac_encode.encoder.output_sample_rate =
+        audio_sample_rate;
+    aac_encode.aac_encode.encoder.output_channels =
+        audio_channels;
+    aac_encode.aac_encode.encoder.bit_rate =
+        audio_bitrate;
+
+    /*
+    * 调试阶段保持 ALSA 的两个输入声道。
+    */
+    aac_encode.aac_encode.encoder.channel_select =
+        rkcam::AudioChannelSelect::Keep;
     /*
      * ============================================================
      * 节点顺序
@@ -418,14 +554,38 @@ int main()
      */
 
     cfg.nodes = {
+        /*
+        * 两个 source 尽量放前面。
+        * stopStages() 正序停止时，可以先停掉音视频采集。
+        */
         capture,
-        tee,
+        audio_capture,
 
+        /*
+        * Video preview branch.
+        */
+        tee,
         preview_rga,
         display,
 
+        /*
+        * Video encode and forwarding branch.
+        */
         record_rga,
         mpp,
+        encodedPacket_tee_config,
+        rtsp_push_cfg,
+
+        /*
+        * Audio encode branch.
+        */
+        aac_encode,
+
+        /*
+        * 同时接收：
+        *   encodedpacket_tee_to_mp4record
+        *   aac_to_mp4record
+        */
         mp4_record,
     };
 
@@ -441,7 +601,7 @@ int main()
     /*
      * 跑 30 秒，也可以 Ctrl+C 提前停止。
      */
-    const int run_seconds = 30;
+    const int run_seconds = 60 * 60;
 
     for (int i = 0; i < run_seconds && g_running; ++i) {
         std::this_thread::sleep_for(std::chrono::seconds(1));

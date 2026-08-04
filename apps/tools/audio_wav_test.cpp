@@ -134,7 +134,7 @@ int main(int argc, char** argv)
     rkcam::StageNodeConfig wav_save;
     wav_save.name = "wav_save";
     wav_save.type = rkcam::StageType::WavSave;
-    wav_save.input_queue = audio_to_wav;
+    wav_save.input_queues[0] = audio_to_wav;
 
     wav_save.wav_save.stage_name = "wav_save";
     wav_save.wav_save.output_path = output_path;

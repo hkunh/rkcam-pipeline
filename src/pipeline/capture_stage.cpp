@@ -2,8 +2,21 @@
 #include "rkcam/core/log.hpp"
 
 #include <utility>
-
+#include <time.h>
 namespace rkcam{
+
+namespace{
+
+int64_t nowUs()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000LL + 
+        static_cast<uint64_t>(ts.tv_nsec) / 1000LL;
+}
+
+}
+
 CaptureStage::CaptureStage(
     const CaptureStageConfig& config,
     std::unique_ptr<IVideoSource> source,
@@ -125,11 +138,13 @@ void CaptureStage::threadLoop()
             continue;
         }
         ++captured_frames_;
+        int64_t nowstamp_us = nowUs();
         if (captured_frames_ % 30 == 0 ||
             (config_.max_frames > 0 && captured_frames_ == config_.max_frames)) {
-            RKCAM_LOGI("[%s] captured_frames=%d",
+            RKCAM_LOGI("[%s] captured_frames=%d nowstamp_us=%lld",
                        config_.stream_id.c_str(),
-                       captured_frames_);
+                       captured_frames_,
+                       static_cast<long long>(nowstamp_us));
         }
 
         if (config_.max_frames > 0 &&
