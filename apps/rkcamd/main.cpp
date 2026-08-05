@@ -166,19 +166,53 @@ int main()
     audio_to_aac.policy = rkcam::QueueFullPolicy::DropOldest;
 
     /*
-    * AacEncode -> Mp4Record audio input
+    * AacEncode -> Audio EncodedPacketTee
     */
-    rkcam::PipelineQueueConfig aac_to_mp4record;
-    aac_to_mp4record.name = "aac_to_mp4record";
-    aac_to_mp4record.value_type =
+    rkcam::PipelineQueueConfig aac_to_encodedpacket_tee;
+    aac_to_encodedpacket_tee.name =
+        "aac_to_encodedpacket_tee";
+    aac_to_encodedpacket_tee.value_type =
         rkcam::PipelineQueueValueType::EncodedPacket;
-    aac_to_mp4record.capacity = 32;
+    aac_to_encodedpacket_tee.capacity = 32;
 
     /*
-    * 录像编码包原则上不应丢。
-    * 如果你的 BlockingQueue 已实现 Block，就使用 Block。
+    * 编码器到 Tee 不应该随意丢包。
     */
-    aac_to_mp4record.policy = rkcam::QueueFullPolicy::Block;
+    aac_to_encodedpacket_tee.policy =
+        rkcam::QueueFullPolicy::Block;
+
+    /*
+    * Audio EncodedPacketTee -> Mp4Record
+    *
+    * 录像分支不应丢 AAC packet。
+    */
+    rkcam::PipelineQueueConfig
+        aac_encodedpacket_tee_to_mp4record;
+
+    aac_encodedpacket_tee_to_mp4record.name =
+        "aac_encodedpacket_tee_to_mp4record";
+    aac_encodedpacket_tee_to_mp4record.value_type =
+        rkcam::PipelineQueueValueType::EncodedPacket;
+    aac_encodedpacket_tee_to_mp4record.capacity = 32;
+    aac_encodedpacket_tee_to_mp4record.policy =
+        rkcam::QueueFullPolicy::Block;
+
+    /*
+    * Audio EncodedPacketTee -> RtspPush
+    *
+    * RTSP 优先保证实时性。网络异常时允许丢旧包，
+    * 避免旧音频不断积压。
+    */
+    rkcam::PipelineQueueConfig
+        aac_encodedpacket_tee_to_rtsppush;
+
+    aac_encodedpacket_tee_to_rtsppush.name =
+        "aac_encodedpacket_tee_to_rtsppush";
+    aac_encodedpacket_tee_to_rtsppush.value_type =
+        rkcam::PipelineQueueValueType::EncodedPacket;
+    aac_encodedpacket_tee_to_rtsppush.capacity = 32;
+    aac_encodedpacket_tee_to_rtsppush.policy =
+        rkcam::QueueFullPolicy::DropOldest;
 
     /*
      * ============================================================
@@ -375,7 +409,7 @@ int main()
     mp4_record.type = rkcam::StageType::Mp4Record;
     mp4_record.input_queues = {
         encodedpacket_tee_to_mp4record,
-        aac_to_mp4record,
+        aac_encodedpacket_tee_to_mp4record,
     };
     mp4_record.mp4_record.stage_name = "mp4_record";
     mp4_record.mp4_record.output_path =
@@ -431,7 +465,7 @@ int main()
      */
     rkcam::StageNodeConfig encodedPacket_tee_config;
 
-    encodedPacket_tee_config.name = "encoded_packet_tee";
+    encodedPacket_tee_config.name = "video_encoded_packet_tee";
     encodedPacket_tee_config.type = rkcam::StageType::EncodedPacketTee;
     encodedPacket_tee_config.input_queues = {mpp_to_encodedpacket_tee};
     encodedPacket_tee_config.output_queues = {
@@ -439,7 +473,7 @@ int main()
         encodedpacket_tee_to_rtsppush,
     };
 
-    encodedPacket_tee_config.encoded_packet_tee.stage_name = "encoded_packet_tee";
+    encodedPacket_tee_config.encoded_packet_tee.stage_name = "video_encoded_packet_tee";
     encodedPacket_tee_config.encoded_packet_tee.continue_on_output_fail = true;
     encodedPacket_tee_config.encoded_packet_tee.log_interval = 30;
 
@@ -457,13 +491,33 @@ int main()
     rtsp_video_cfg.wait_key_frame = true;
 
     rkcam::RtspAudioStreamConfig rtsp_audio_cfg;
-    rtsp_audio_cfg.enabled = false; 
+
+    rtsp_audio_cfg.enabled = true;
+    rtsp_audio_cfg.stream_id = "audio0" ;
+    rtsp_audio_cfg.codec = rkcam::CodecType::AAC;
+    rtsp_audio_cfg.sample_rate = audio_sample_rate;
+    rtsp_audio_cfg.channels = audio_channels;
+    rtsp_audio_cfg.bit_rate = audio_bitrate;
+    /*
+    * 当前为空：
+    * Mp4RecordStage 根据 AAC-LC / 48kHz / 2ch 自动生成 ASC。
+    */
+    rtsp_audio_cfg.extradata.clear();
 
     rkcam::StageNodeConfig rtsp_push_cfg;
     rtsp_push_cfg.name = "rtsp_push";
     rtsp_push_cfg.type = rkcam::StageType::RtspPush;
-    rtsp_push_cfg.input_queues = {encodedpacket_tee_to_rtsppush};
-
+    /*
+    * CameraPipeline::createStageForNode() 中已经约定：
+    *
+    * input_queues[0] = H264 video
+    * input_queues[1] = AAC audio
+    */
+    rtsp_push_cfg.input_queues = {
+        encodedpacket_tee_to_rtsppush,
+        aac_encodedpacket_tee_to_rtsppush,
+    };
+    rtsp_push_cfg.output_queues = {};
     rtsp_push_cfg.rtsp_push.stage_name = "rtsp_push";
     rtsp_push_cfg.rtsp_push.url = "rtsp://192.168.56.100:8554/live";
     rtsp_push_cfg.rtsp_push.video = rtsp_video_cfg;
@@ -512,7 +566,7 @@ int main()
         audio_to_aac,
     };
     aac_encode.output_queues = {
-        aac_to_mp4record,
+        aac_to_encodedpacket_tee,
     };
 
     aac_encode.aac_encode.stage_name = "aac_encode";
@@ -536,6 +590,34 @@ int main()
         audio_channels;
     aac_encode.aac_encode.encoder.bit_rate =
         audio_bitrate;
+
+
+
+    /*
+    * ============================================================
+    * Audio EncodedPacketTeeStage
+    *
+    * AacEncode
+    *    ↓
+    * Audio EncodedPacketTee
+    *    ├── Mp4Record
+    *    └── RtspPush
+    * ============================================================
+    */
+    rkcam::StageNodeConfig audio_encodedpacket_tee;
+    audio_encodedpacket_tee.name = "audio_encoded_packet_tee";
+    audio_encodedpacket_tee.type = rkcam::StageType::EncodedPacketTee;
+    audio_encodedpacket_tee.input_queues = {aac_to_encodedpacket_tee};
+
+    audio_encodedpacket_tee.output_queues = {
+        aac_encodedpacket_tee_to_mp4record,
+        aac_encodedpacket_tee_to_rtsppush,
+    };
+    audio_encodedpacket_tee.encoded_packet_tee.stage_name = "audio_encoded_packet_tee";
+    audio_encodedpacket_tee.encoded_packet_tee.continue_on_output_fail = true;
+    audio_encodedpacket_tee.encoded_packet_tee.log_interval = 50;
+
+
 
     /*
     * 调试阶段保持 ALSA 的两个输入声道。
@@ -574,19 +656,20 @@ int main()
         record_rga,
         mpp,
         encodedPacket_tee_config,
-        rtsp_push_cfg,
+        
 
         /*
         * Audio encode branch.
         */
         aac_encode,
-
+        audio_encodedpacket_tee,
         /*
         * 同时接收：
         *   encodedpacket_tee_to_mp4record
         *   aac_to_mp4record
         */
         mp4_record,
+        rtsp_push_cfg,
     };
 
     rkcam::CameraPipeline pipeline(cfg);

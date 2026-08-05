@@ -619,29 +619,119 @@ bool CameraPipeline::createStageForNode(StageNode& node)
         }
         case StageType::RtspPush:{
             if (!node.output_queues.empty()) {
-                RKCAM_LOGE("[%s] RtspPushStage %s should not have output_queues, got=%zu",
-                        config_.stream_id.c_str(),
-                        node.config.name.c_str(),
-                        node.output_queues.size());
-                return false;
-            }
-            auto input_box = getSingleInputQueue(node, config_.stream_id);
-            auto* in_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(input_box, node.config.name);
-            if (!in_q) {
+                RKCAM_LOGE(
+                    "[%s] RtspPushStage %s should not have output queues, got=%zu",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str(),
+                    node.output_queues.size());
                 return false;
             }
             RtspPushStageConfig rtsp_cfg = node.config.rtsp_push;
             if (rtsp_cfg.stage_name.empty()) {
-                rtsp_cfg.stage_name = node.config.name;
+                rtsp_cfg.stage_name =
+                    node.config.name;
             }
-            node.stage = std::make_unique<RtspPushStage>(rtsp_cfg, *in_q);
-            RKCAM_LOGI("[%s] create RtspPushStage: %s <- %s url=%s",
+            /*
+            * 当前 RtspPushStage 仍然要求视频开启，
+            * 并以第一帧视频 IDR 作为推流时间轴起点。
+            */
+            if(!rtsp_cfg.video.enabled)
+            {
+                RKCAM_LOGE(
+                    "[%s] RtspPushStage %s currently requires video enabled",
+                    config_.stream_id.c_str(),
+                    node.config.name.c_str());
+                return false;
+            }
+            /*
+            * 视频 stream_id 默认继承 CameraPipeline 的 stream_id。
+            */
+            if(rtsp_cfg.video.stream_id.empty())
+            {
+                rtsp_cfg.video.stream_id = config_.stream_id;
+            }
+            /*
+            * 音频 stream_id 必须与 AacEncodeStage 输出保持一致。
+            */
+            if (rtsp_cfg.audio.enabled &&
+                rtsp_cfg.audio.stream_id.empty()) {
+                rtsp_cfg.audio.stream_id = "audio0";
+            }
+            const size_t expected_input_count = static_cast<size_t>(rtsp_cfg.video.enabled ? 1 : 0) +
+                                                static_cast<size_t>(rtsp_cfg.audio.enabled ? 1 : 0);
+            if(node.input_queues.size() != expected_input_count){
+                RKCAM_LOGE(
+                    "[%s] RtspPushStage %s requires %zu input queues, got=%zu",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    node.config.input_queues[0].name.c_str(),
-                    rtsp_cfg.url.c_str());
+                    expected_input_count,
+                    node.input_queues.size());
+                return false;
+            }
+            std::vector<EncodedPacketInputPort> ports;
+            ports.reserve(expected_input_count);
+            size_t input_index = 0;
+            /*
+            * 固定约定：
+            *
+            * input_queues[0] = H264 video
+            * input_queues[1] = AAC audio（启用音频时）
+            */
+            if(rtsp_cfg.video.enabled)
+            {
+                auto* video_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queues[input_index], node.config.name);
+                if (!video_q) {
+                    RKCAM_LOGE(
+                        "[%s] RtspPushStage %s video input "
+                        "requires EncodedPacket queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                    return false;
+                }
+                EncodedPacketInputPort video_port;
+                video_port.port_name = "video";
+                video_port.stream_id = rtsp_cfg.video.stream_id;
+                video_port.media_type = MediaType::Video;
+                video_port.codec = rtsp_cfg.video.codec;
+                video_port.queue = video_q;
+                video_port.required = true;
+                ports.push_back(std::move(video_port));
+                ++input_index;
+            }
+            if(rtsp_cfg.audio.enabled)
+            {
+                auto* audio_q = getTypeQueue<EncodedPacket, PipelineQueueValueType::EncodedPacket>(node.input_queues[input_index], node.config.name);
+                if (!audio_q) {
+                    RKCAM_LOGE(
+                        "[%s] RtspPushStage %s audio input "
+                        "requires EncodedPacket queue",
+                        config_.stream_id.c_str(),
+                        node.config.name.c_str());
+                    return false;
+                }
+                EncodedPacketInputPort audio_port;
+                audio_port.port_name = "audio";
+                audio_port.stream_id = rtsp_cfg.audio.stream_id;
+                audio_port.media_type = MediaType::Audio;
+                audio_port.queue = audio_q;
+                audio_port.required = true;
+                ports.push_back(std::move(audio_port));
+                ++input_index;
+            }
+            node.stage = std::make_unique<RtspPushStage>(rtsp_cfg, ports);
+            RKCAM_LOGI(
+                "[%s] create RtspPushStage: %s "
+                "inputs=%zu video=%s audio=%s audio_enabled=%d url=%s",
+                config_.stream_id.c_str(),
+                node.config.name.c_str(),
+                ports.size(),
+                rtsp_cfg.video.stream_id.c_str(),
+                rtsp_cfg.audio.stream_id.c_str(),
+                rtsp_cfg.audio.enabled ? 1 : 0,
+                rtsp_cfg.url.c_str());
 
             return true;
+
         }
         case StageType::Display:{
             auto input_box = getSingleInputQueue(node, config_.stream_id);

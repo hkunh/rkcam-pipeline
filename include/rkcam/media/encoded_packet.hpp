@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rkcam/core/blocking_queue.hpp"
+
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -54,5 +56,24 @@ struct EncodedPacket{
     }
 	
 };
+struct EncodedPacketInputPort{
+    std::string port_name;
+    /*
+     * 用于检查上游有没有接错。
+     */
+    std::string stream_id;
+    MediaType media_type = MediaType::Unknown;
+    CodecType codec = CodecType::Unknown;
+    /*
+     * 非拥有指针。
+     * 队列生命周期必须长于 Mp4RecordStage。
+     */
+    BlockingQueue<EncodedPacket>* queue = nullptr;
 
+    /*
+     * 当前先保留。
+     * 后面可用于“音频异常时是否允许仅视频继续录像”。
+     */
+    bool required = true;
+};
 }

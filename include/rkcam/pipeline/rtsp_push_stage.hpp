@@ -31,7 +31,10 @@ enum class RtspPacketWriteMode {
 
 struct RtspVideoStreamConfig {
     bool enabled = true;
-
+    /*
+     * 为空时，由 CameraPipeline 使用自己的 config_.stream_id。
+     */
+    std::string stream_id;
     CodecType codec = CodecType::H264;
 
     int width = 0;
@@ -54,7 +57,10 @@ struct RtspAudioStreamConfig {
      *   RTSP muxer 写 header 前就必须知道是否有音频 stream。
      */
     bool enabled = false;
-
+    /*
+     * 应当与 AacEncodeStage 输出的 stream_id 一致。
+     */
+    std::string stream_id = "audio0";
     CodecType codec = CodecType::AAC;
 
     int sample_rate = 48000;
@@ -85,10 +91,33 @@ struct RtspPushStageConfig {
     bool rtsp_over_tcp = true;
 
     /*
-     * 默认不复制码流数据。
+     * H264压缩码流保持零拷贝。
      */
-    RtspPacketWriteMode packet_write_mode =
+    RtspPacketWriteMode video_write_mode =
         RtspPacketWriteMode::RefCountedNoCopy;
+    /*
+     * AAC packet很小，第一版复制更加简单可靠。
+     */
+    RtspPacketWriteMode audio_write_mode =
+        RtspPacketWriteMode::Copy;
+
+    /*
+     * 等待第一帧视频IDR期间最多缓存多少AAC packet。
+     *
+     * 48kHz / 1024 samples:
+     * 64包约等于1.36秒。
+     */
+    size_t max_pending_audio_packets = 64;
+    /*
+     * FFmpeg音视频交织最长允许缓存时间。
+     */
+    int64_t max_interleave_delta_us =5000; //50ms
+
+    /*
+     * 避免MediaMTX再次拆分过大的RTP packet。
+     */
+    int rtp_packet_size = 1400;
+
 
     /*
      * 网络输出可能阻塞/失败。
@@ -104,7 +133,9 @@ struct RtspPushStageConfig {
 class RtspPushStage : public IStage{
 
 public:
-    RtspPushStage(const RtspPushStageConfig& config, BlockingQueue<EncodedPacket>& input_queue);
+    RtspPushStage(
+        const RtspPushStageConfig& config,
+        const std::vector<EncodedPacketInputPort>& input_ports);
     ~RtspPushStage() override;
 
     RtspPushStage(const RtspPushStage&) = delete;
@@ -114,9 +145,35 @@ public:
     void stop() override;
 
 private:
-    void threadLoop();
+    enum class InputEventType{
+        Packet,
+        Eos,
+    };
+    struct InputEvent{
+        InputEventType type = InputEventType::Packet;
+        size_t port_index = 0;
+        EncodedPacket packet;
+    };
+
+private:
+
+    bool normalizeAndValidateConfig();
+    bool validateInputPorts() const;
+
+    void inputReaderLoop(size_t port_index);
+    void muxWriterLoop();
+    void stopAllInputQueues();
+
+    bool validatePacketForPort(const EncodedPacketInputPort& port, const EncodedPacket& packet)const;
+
+    bool handleInputPacket(size_t port_index, EncodedPacket&& packet);
+    bool handlePacketBeforeHeader(EncodedPacket&& packet);
 
     bool initMuxerFromVideoPacket(const EncodedPacket& packet);
+
+    bool flushPendingAudio(EncodedPacket&& first_video_packet);
+
+
     bool createVideoStreamFromH264(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps);
 
     bool createAudioStream();
@@ -129,6 +186,8 @@ private:
     bool makeAvPacketCopy(const EncodedPacket& packet, struct AVPacket& avpkt);
     bool makeAvPacketRefCountedNoCopy(const EncodedPacket& packet, struct AVPacket& avpkt);
 
+    void accountPushedPacket(const EncodedPacket& packet);
+
     void closeMuxer();
 
     int64_t relativePtsUs(int64_t pts_us) const;
@@ -136,10 +195,23 @@ private:
 private:
     RtspPushStageConfig config_;
 
-    BlockingQueue<EncodedPacket>& input_queue_;
+    std::vector<EncodedPacketInputPort> input_ports_;
+    std::vector<std::thread> input_threads_;
+    
+    /*
+     * 唯一允许操作AVFormatContext的线程。
+     */
 
-    std::thread thread_;
+    std::thread mux_thread_;
     std::atomic<bool> running_{false};
+
+    BlockingQueue<InputEvent> internal_queue_;
+    std::vector<bool> input_eos_;
+
+    /*
+     * RTSP header创建前暂存AAC。
+     */
+    std::deque<EncodedPacket> pending_audio_packets_;
 
     AVFormatContext* fmt_ctx_ = nullptr;
     AVStream* video_stream_ = nullptr;
@@ -151,12 +223,12 @@ private:
     int64_t last_video_dts_ = INT64_MIN;
     int64_t last_audio_dts_ = INT64_MIN;
 
-    int input_packets_ = 0;
-    int pushed_packets_ = 0;
-    int dropped_packets_ = 0;
-    int write_failures_ = 0;
-
-
+    uint64_t input_packets_ = 0;
+    uint64_t pushed_packets_ = 0;
+    uint64_t pushed_video_packets_ = 0;
+    uint64_t pushed_audio_packets_ = 0;
+    uint64_t dropped_packets_ = 0;
+    uint64_t write_failures_ = 0;
 
 };
 
