@@ -1615,9 +1615,10 @@ void RtspPushStage::accountPushedPacket(
     }
 
     if (config_.log_interval > 0 &&
-        pushed_packets_ %
+        pushed_video_packets_ %
             static_cast<uint64_t>(
-                config_.log_interval) == 0) {
+                config_.log_interval) == 0 && (packet.media_type ==
+        MediaType::Video)) {  //按照视频的节奏来打印
         int64_t nowstamp_us = nowUs();
         const int64_t latency_us = nowstamp_us - packet.pts_us;
         RKCAM_LOGI(
