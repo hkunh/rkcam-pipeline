@@ -595,6 +595,100 @@ MppFrameFormat MppEncoder::toMppFrameFormat(PixelFormat format)
     }
 }
 
+bool MppEncoder::requestIdr()
+{
+    if (!ctx_ || !mpi_) {
+        RKCAM_LOGE("MppEncoder requestIdr failed: encoder not initialized");
+        return false;
+    }
+    const MPP_RET ret = mpi_->control(ctx_, MPP_ENC_SET_IDR_FRAME, nullptr);
+    if(ret != MPP_OK)
+    {
+        RKCAM_LOGE(
+            "MPP_ENC_SET_IDR_FRAME failed: ret=%d",
+            ret);
+        return false;
+    }
+    return true;
+}
+bool MppEncoder::getCodecHeader(std::vector<uint8_t>& header)
+{
+    header.clear();
+
+    if (!ctx_ || !mpi_) {
+        RKCAM_LOGE(
+            "MppEncoder getCodecHeader failed: "
+            "encoder not initialized");
+        return false;
+    }
+    /*
+     * SPS/PPS通常非常小。
+     *
+     * 这里给64 KiB只是留足余量，
+     * 每次开始录像调用一次，完全不存在性能问题。
+     */
+    constexpr size_t kHeaderBufferSize = 64 * 1024;
+    std::vector<uint8_t> buffer(kHeaderBufferSize);
+    MppPacket packet = nullptr;
+    MPP_RET ret = mpp_packet_init(&packet, buffer.data(), buffer.size());
+    if (ret != MPP_OK || !packet) {
+        RKCAM_LOGE(
+            "mpp_packet_init for codec header "
+            "failed: ret=%d",
+            ret);
+        return false;
+    }
+    /*
+     * 非常重要。
+     *
+     * Rockchip官方mpi_enc_test同样明确这么做：
+     * GET_HDR_SYNC之前必须把输出packet长度清0。
+     */
+    mpp_packet_set_length(packet, 0);
+
+    /*
+     * 获取当前encoder配置对应的码流头。
+     *
+     * H264 -> SPS/PPS
+     * H265 -> VPS/SPS/PPS
+     */
+    ret = mpi_->control(ctx_, MPP_ENC_GET_HDR_SYNC, packet);
+    if (ret != MPP_OK) {
+        RKCAM_LOGE(
+            "MPP_ENC_GET_HDR_SYNC failed: "
+            "ret=%d",
+            ret);
+        mpp_packet_deinit(&packet);
+        return false;
+    }
+    void* data = mpp_packet_get_pos(packet);
+    const size_t size = mpp_packet_get_length(packet);
+    if (!data || size == 0) {
+        RKCAM_LOGE(
+            "MPP_ENC_GET_HDR_SYNC returned "
+            "empty header");
+
+        mpp_packet_deinit(
+            &packet);
+
+        return false;
+    }
+    /*
+     * 必须复制出来。
+     *
+     * packet后面马上deinit，
+     * 临时buffer也马上析构。
+     */
+    const auto* begin = static_cast<const uint8_t*>(data);
+    header.assign(begin, begin + size);
+    mpp_packet_deinit(&packet);
+    RKCAM_LOGI(
+        "MppEncoder codec header acquired: "
+        "size=%zu",
+        header.size());
+
+    return true;
+}
 
 
 }

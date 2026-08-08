@@ -17,9 +17,22 @@ extern "C" {
 #include <string>
 #include <utility>
 #include <vector>
+#include <ctime>
 
 namespace rkcam{
 namespace{
+
+static int64_t nowMonotonicUs()
+{
+    timespec ts{};
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    {
+        return -1;
+    }
+    return static_cast<int64_t>(ts.tv_sec) * 1000000LL +
+        static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+}
+
 
 //NALU（Network Abstraction Layer Unit，网络提取单元）
 struct NalUnit{
@@ -357,16 +370,26 @@ bool Mp4RecordStage::start()
     saved_audio_packets_ = 0;
     failed_packets_ = 0;
     dropped_audio_before_header_ = 0;
+    idle_dropped_packets_ = 0;
+
 
 
     first_pts_us_ = -1;
+    start_request_pts_us_ = -1;
     header_written_ = false;
 
     pending_audio_packets_.clear();
 
     input_eos_.assign(input_ports_.size(), false);
 
+    session_video_extradata_.clear();
+
     internal_queue_.reset();
+
+    recording_state_.store(
+        RecordingState::Idle,
+        std::memory_order_release
+    );
 
     running_ = true;
     /*
@@ -385,9 +408,9 @@ bool Mp4RecordStage::start()
     }
 
 
-    RKCAM_LOGI("[%s] Mp4RecordStage started: output=%s inputs=%zu video=%d audio=%d",
+    RKCAM_LOGI("[%s] Mp4RecordStage started: inputs=%zu video=%d audio=%d",
                config_.stage_name.c_str(),
-               config_.output_path.c_str(),
+            //    config_.output_path.c_str(),
                input_ports_.size(),
                config_.video.enabled ? 1 : 0,
                config_.audio.enabled ? 1 : 0);
@@ -401,12 +424,12 @@ bool Mp4RecordStage::normalizeAndValidateConfig()
     {
         config_.stage_name = "mp4_record";
     }
-    if(config_.output_path.empty())
-    {
-        RKCAM_LOGE("[%s] output_path is empty",
-                   config_.stage_name.c_str());
-        return false;
-    }
+    // if(config_.output_path.empty())
+    // {
+    //     RKCAM_LOGE("[%s] output_path is empty",
+    //                config_.stage_name.c_str());
+    //     return false;
+    // }
     /*
      * 兼容旧配置：
      *   如果新 video 配置没填，就用旧字段。
@@ -615,7 +638,12 @@ void Mp4RecordStage::stop()
     }
 
     running_ = false;
-    closeMuxer();  //在mux_thread_中已经关闭了muxer，这里保险再关闭一次。函数内部允许重复关闭
+    /*
+     * 不再调用 closeMuxer()。
+     * 所有 FFmpeg 生命周期只归 Mux Writer 所有。
+     */
+    // closeMuxer();
+    recording_state_.store(RecordingState::Idle, std::memory_order_release);  
     RKCAM_LOGI("[%s] Mp4RecordStage stopped: saved=%d video=%d audio=%d failed=%d",
                config_.stage_name.c_str(),
                saved_packets_,
@@ -624,7 +652,85 @@ void Mp4RecordStage::stop()
                failed_packets_);
 
 }
+bool Mp4RecordStage::beginRecording(const std::string& output_path, const std::vector<uint8_t>& video_extradata, const uint64_t request_time_us)
+{
+    if (!running_) {
+        RKCAM_LOGE(
+            "[%s] beginRecording failed: stage not running",
+            config_.stage_name.c_str());
+        return false;
+    }
+    if(output_path.empty())
+    {
+        RKCAM_LOGE(
+            "[%s] beginRecording failed: output path empty",
+            config_.stage_name.c_str());
+        return false;
+    }
+    RecordCommand command;
+    command.type = RecordCommandType::Begin;
+    command.output_path = output_path;
+    command.request_time_us = request_time_us;
+    command.video_extradata = video_extradata;
+    return postCommandAndWait(std::move(command));
+}
+bool Mp4RecordStage::postCommandAndWait(RecordCommand&& command)
+{
+    auto completion = std::make_shared<std::promise<bool>>();
+    std::future<bool> result = completion->get_future();
+    command.completion = completion;
 
+    InputEvent event;
+    event.type = InputEventType::Command;
+    event.command = std::move(command);
+    if(!internal_queue_.push(std::move(event)))
+    {
+        return false;
+    }
+    /*
+     * Begin 只切状态，通常很快。
+     * End 需要写 trailer，慢存储上可能稍久。
+     */
+    constexpr auto timeout = std::chrono::seconds(5);
+    if(result.wait_for(timeout) != std::future_status::ready)
+    {
+        RKCAM_LOGE(
+            "[%s] recording command timeout",
+            config_.stage_name.c_str());
+        return false;
+    }
+    try{
+        return result.get();
+    }
+    catch(...)
+    {
+        RKCAM_LOGE(
+            "[%s] recording command completion failed",
+            config_.stage_name.c_str());
+        return false;
+    }
+}
+RecordingState Mp4RecordStage::recordingState() const
+{
+    return recording_state_.load(std::memory_order_acquire);
+}
+std::string Mp4RecordStage::currentOutputPath() const
+{
+    std::lock_guard<std::mutex> lock(state_mutex_);  //主要防止读的时候另外一个线程在写
+    return active_output_path_;
+}
+
+bool Mp4RecordStage::endRecording()
+{
+    if(!running_)
+    {
+        return false;
+    }
+    RecordCommand command;
+    command.type = RecordCommandType::End;
+    command.request_time_us = nowMonotonicUs();
+    return postCommandAndWait(std::move(command));
+}
 void Mp4RecordStage::muxWriterLoop()
 {
     size_t eos_count = 0;
@@ -636,6 +742,26 @@ void Mp4RecordStage::muxWriterLoop()
         {
             break;
         }
+        
+        if(event.type == InputEventType::Command)
+        {
+            auto completion = event.command.completion;//这里std::promise是使用了std::shared_ptr，所以可以直接赋值
+            const bool ok = handleRecordCommand(std::move(event.command));
+            /*
+             * 必须在所有处理完成后再通知控制线程。
+             */
+             if(completion){
+                try{
+                    completion->set_value(ok);
+                }
+                catch(...)
+                {
+                    //控制线程可能已经超时退出
+                }
+             }
+             continue;
+        }
+
         if(event.type == InputEventType::Eos)
         {
             if(event.port_index < input_eos_.size() && !input_eos_[event.port_index])
@@ -663,16 +789,29 @@ void Mp4RecordStage::muxWriterLoop()
             }
             continue;
         }
+        // RKCAM_LOGE("[%s] before handleInputPacket", config_.stage_name.c_str());
         if(!handleInputPacket(event.port_index, std::move(event.packet)))
         {
             ++failed_packets_;
+            const RecordingState state = recordingState();
+            if(state == RecordingState::Starting || state == RecordingState::Recording)
+            {
+                RKCAM_LOGE(
+                    "[%s] recording session entered Error",
+                    config_.stage_name.c_str());
+                closeMuxer();
+                pending_audio_packets_.clear();
+                recording_state_.store(RecordingState::Error, std::memory_order_release);
+            }
         }
-
     }
     /*
-     * 所有 FFmpeg 关闭动作也在同一个线程完成。
+     * Pipeline 整体结束时，如果还在录像，
+     * 正常写 trailer。
      */
     closeMuxer();  // 必须在唯一 mux 线程中执行
+    pending_audio_packets_.clear();
+    recording_state_.store(RecordingState::Idle, std::memory_order_release);
     running_ = false;
     RKCAM_LOGI("[%s] mux writer exit: saved=%d video=%d audio=%d failed=%d",
                config_.stage_name.c_str(),
@@ -682,6 +821,90 @@ void Mp4RecordStage::muxWriterLoop()
                failed_packets_);
 
 }
+bool Mp4RecordStage::handleRecordCommand(RecordCommand&& command)
+{
+    switch(command.type)
+    {
+        case RecordCommandType::Begin:
+            return beginRecordingInMuxThread(command.output_path, command.request_time_us, command.video_extradata);
+        case  RecordCommandType::End:
+            return endRecordingInMuxThread();
+    }
+    return false;
+}
+bool Mp4RecordStage::beginRecordingInMuxThread(const std::string& output_path, int64_t request_time_us, const std::vector<uint8_t>& video_extradata)
+{
+    const RecordingState state = recordingState();
+    if(state != RecordingState::Idle && state != RecordingState::Error)
+    {
+        RKCAM_LOGE(
+            "[%s] begin recording rejected: state=%d",
+            config_.stage_name.c_str(),
+            static_cast<int>(state));
+        return false;
+    }
+    closeMuxer();
+    pending_audio_packets_.clear();
+    /*
+     * 每次录像都是 CameraPipeline 刚从 MPP
+     * 获取的新 SPS/PPS。
+     */
+    session_video_extradata_ = video_extradata;
+    first_pts_us_ = -1;
+    header_written_ = false;
+    start_request_pts_us_ = request_time_us;
+
+    saved_packets_ = 0;
+    saved_video_packets_ = 0;
+    saved_audio_packets_ = 0;
+    failed_packets_ = 0;
+    dropped_audio_before_header_ = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        active_output_path_ = output_path;
+    }
+
+    recording_state_.store(RecordingState::Starting, std::memory_order_release);
+    RKCAM_LOGI(
+        "[%s] recording Starting: path=%s request_pts=%lld",
+        config_.stage_name.c_str(),
+        output_path.c_str(),
+        static_cast<long long>(
+            start_request_pts_us_));
+
+    return true;
+}
+bool Mp4RecordStage::endRecordingInMuxThread()
+{
+    const RecordingState state = recordingState();
+    if(state == RecordingState::Idle)
+    {
+        return true;
+    }
+    recording_state_.store(RecordingState::Stopping, std::memory_order_release);
+    closeMuxer();
+    pending_audio_packets_.clear();
+    session_video_extradata_.clear();
+    start_request_pts_us_ = -1;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        active_output_path_.clear();
+    }
+    recording_state_.store(RecordingState::Idle, std::memory_order_release);
+    RKCAM_LOGI(
+        "[%s] recording stopped: saved=%d "
+        "video=%d audio=%d failed=%d",
+        config_.stage_name.c_str(),
+        saved_packets_,
+        saved_video_packets_,
+        saved_audio_packets_,
+        failed_packets_);
+
+    return true;
+
+}
+
 bool Mp4RecordStage::validatePacketForPort(
     const EncodedPacketInputPort& port,
     const EncodedPacket& packet) const
@@ -718,6 +941,19 @@ bool Mp4RecordStage::validatePacketForPort(
 
     return true;
 }
+int64_t Mp4RecordStage::packetTimestampUs(
+    const EncodedPacket& packet) const
+{
+    if (packet.pts_us >= 0) {
+        return packet.pts_us;
+    }
+
+    if (packet.dts_us >= 0) {
+        return packet.dts_us;
+    }
+
+    return -1;
+}
 bool Mp4RecordStage::handleInputPacket(size_t port_index, EncodedPacket&& packet)
 {
     if (port_index >= input_ports_.size()) {
@@ -734,17 +970,100 @@ bool Mp4RecordStage::handleInputPacket(size_t port_index, EncodedPacket&& packet
     {
         return true;
     }
-    if(!header_written_)
+
+    const RecordingState state = recordingState();
+    if(state == RecordingState::Idle || 
+       state == RecordingState::Stopping ||
+       state == RecordingState::Error)
     {
-        return handlePacketBeforeHeader(std::move(packet));
+        ++idle_dropped_packets_;
+        return true;
     }
-    if(!writePacket(packet))
+    //验证pts dts合法性
+    const int64_t packet_ts_us = packetTimestampUs(packet);
+    if(packet_ts_us < 0)
     {
         return false;
     }
-    accountSavedPacket(packet);
+    /*
+     * Command 前已经进入 Reader/internal queue 的旧 packet
+     * 不允许写进新录像。
+     */
+    if(state == RecordingState::Starting &&
+        start_request_pts_us_ >= 0 &&
+        packet_ts_us < start_request_pts_us_)
+    {
+        ++idle_dropped_packets_;
+        RKCAM_LOGW("[%s] idle_dropped_packets_=%lld packet_ts_us=%lld start_request_pts_us_=%lld", config_.stage_name.c_str(), idle_dropped_packets_, packet_ts_us,start_request_pts_us_);
+        return true;
+    }
+    if(state == RecordingState::Starting)
+    {
+        const bool ok = handlePacketBeforeHeader(std::move(packet));
+        if(ok && header_written_)
+        {
+            recording_state_.store(RecordingState::Recording, std::memory_order_release);
+            RKCAM_LOGI(
+                "[%s] recording Running: path=%s start_pts=%lld",
+                config_.stage_name.c_str(),
+                active_output_path_.c_str(),
+                static_cast<long long>(
+                    first_pts_us_));
+        }
+        return ok;
+    }
+    if(state == RecordingState::Recording)
+    {
+        /*
+         * 两个 Reader 调度顺序不同，
+         * 仍可能晚到一包录像起点之前的数据。
+         */
+        if(first_pts_us_ >= 0 && packet_ts_us < first_pts_us_)
+        {
+            ++dropped_audio_before_header_;
+            return true;
+        }
+        if(!writePacket(packet))
+        {
+            return false;
+        }
+        accountSavedPacket(packet);
+        return true;
+    }
     return true;
 }
+//废弃，改直接通过mpp stage传入video extradata,每次录像动态获取
+// bool Mp4RecordStage::tryUpdateSessionVideoExtradata(const EncodedPacket& packet)
+// {
+    
+//     if (packet.media_type != MediaType::Video ||
+//         packet.codec != CodecType::H264 ||
+//         packet.empty()) {
+//         return false;
+//     }
+//     std::vector<uint8_t> sps;
+//     std::vector<uint8_t> pps;
+//     std::vector<uint8_t> extradata;
+//     if(!extractSpsPpsFromAnnexB(packet.buffer->data, sps, pps))
+//     {
+//         return false;
+//     }
+//     if(!buildAnnexBExtradata(sps, pps, extradata))
+//     {
+//         return false;
+//     }
+//     /*
+//      * 这是当前 Begin 命令之后取得的新 SPS/PPS。
+//      */
+//     session_video_extradata_ = std::move(extradata);
+//     RKCAM_LOGI(
+//         "[%s] got current recording SPS/PPS: size=%zu pts=%lld",
+//         config_.stage_name.c_str(),
+//         session_video_extradata_.size(),
+//         static_cast<long long>(packet.pts_us));
+
+//     return true;
+// }
 bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
 {
     /*
@@ -784,7 +1103,10 @@ bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
         packet.codec != CodecType::H264) {
         return false;
     }
-
+    /*
+     * 废弃
+     */
+    //  tryUpdateSessionVideoExtradata(packet);
     /*
      * 必须从第一帧可独立解码的 IDR 开始。
      * 这里限制一帧内必须同时包含sps pps idr
@@ -793,20 +1115,30 @@ bool Mp4RecordStage::handlePacketBeforeHeader(EncodedPacket&& packet)
         return true;
     }
 
-    std::vector<uint8_t> extradata = config_.video.extradata;
-    if(extradata.empty())
+    if(session_video_extradata_.empty())
     {
-        return initializeFromFirstVideoPacket(std::move(packet));
+        RKCAM_LOGE(
+            "[%s] got IDR but current recording SPS/PPS is unavailable, "
+            "continue waiting",
+            config_.stage_name.c_str());
+
+        return true;
+    } 
+
+    const int64_t start_pts_us =
+        packetTimestampUs(packet);
+
+    if(start_pts_us < 0)
+    {
+        return false;
     }
-    else{
-        const int64_t start_pts = std::max<int64_t>(0, packet.pts_us);
-        if (!initMuxerWithVideoExtradata(
-                extradata,
-                start_pts)) {
-            return false;
-        }
-        return flushAudioPackets(std::move(packet));
+    if (!initMuxerWithVideoExtradata(
+            session_video_extradata_,
+            start_pts_us)) {
+        return false;
     }
+    return flushAudioPackets(std::move(packet));
+
 
 }
 bool Mp4RecordStage::initializeFromFirstVideoPacket(EncodedPacket&& video_packet)
@@ -1049,12 +1381,18 @@ bool Mp4RecordStage::initMuxerWithVideoExtradata(const std::vector<uint8_t>& vid
     {
         return true;
     }
+    if (active_output_path_.empty()) {
+        RKCAM_LOGE(
+            "[%s] active output path is empty",
+            config_.stage_name.c_str());
+        return false;
+    }
     int ret = avformat_alloc_output_context2
     (
         &fmt_ctx_,
         nullptr,
         "mp4",
-        config_.output_path.c_str()
+        active_output_path_.c_str()
     );
     if(ret < 0 ||!fmt_ctx_)
     {
@@ -1083,12 +1421,12 @@ bool Mp4RecordStage::initMuxerWithVideoExtradata(const std::vector<uint8_t>& vid
 
     if(!(fmt_ctx_->oformat->flags & AVFMT_NOFILE))
     {
-        ret = avio_open(&fmt_ctx_->pb, config_.output_path.c_str(), AVIO_FLAG_WRITE);
+        ret = avio_open(&fmt_ctx_->pb, active_output_path_.c_str(), AVIO_FLAG_WRITE);
         if (ret < 0) {
             RKCAM_LOGE("[%s] avio_open failed: %s path=%s",
                        config_.stage_name.c_str(),
                        ffmpegErrorToString(ret).c_str(),
-                       config_.output_path.c_str());
+                       active_output_path_.c_str());
 
             closeMuxer();
             return false;
@@ -1108,7 +1446,7 @@ bool Mp4RecordStage::initMuxerWithVideoExtradata(const std::vector<uint8_t>& vid
     header_written_ = true;
     RKCAM_LOGI("[%s] mp4 muxer initialized: %s video=%dx%d@%d audio=%d/%dch video_extra=%zu audio_extra=%zu",
                config_.stage_name.c_str(),
-               config_.output_path.c_str(),
+               active_output_path_.c_str(),
                config_.video.width,
                config_.video.height,
                config_.video.fps,
@@ -1197,7 +1535,10 @@ bool Mp4RecordStage::addAudioStream()
     par->channel_layout = channelLayoutForChannels(config_.audio.channels);
     par->bit_rate = config_.audio.bit_rate;
     par->format = AV_SAMPLE_FMT_FLTP;
-
+    /*
+    * AAC-LC 每个 access unit 1024 samples/channel。
+    */
+    par->frame_size = 1024;
     if(!setCodecparExtradata(par, extradata))
     {
         RKCAM_LOGE("[%s] set audio extradata failed",
@@ -1307,25 +1648,35 @@ bool Mp4RecordStage::writePacketToStream(const EncodedPacket& packet, AVStream* 
     avpkt.pos = -1;
     const AVRational input_time_base = AVRational{1, 1000000};
 
-    int64_t pts_us = packet.pts_us;
-    int64_t dts_us = packet.dts_us > 0 ? packet.dts_us : packet.pts_us;
+    int64_t pts_us = packet.pts_us >= 0 ? packet.pts_us : packet.dts_us;
+    int64_t dts_us = packet.dts_us >= 0 ? packet.dts_us : packet.pts_us;
+    if (first_pts_us_ >= 0 &&
+        (pts_us < first_pts_us_ ||
+        dts_us < first_pts_us_)) {
+
+        /*
+        * 起点前 packet 直接丢弃，
+        * 不伪造为 PTS=0。
+        */
+        return true;
+    }
     if(first_pts_us_ >= 0)
     {
         pts_us -= first_pts_us_;
         dts_us -= first_pts_us_;
     }
 
-    /*
-     * 第一版：
-     *   header 前音频已经丢弃。
-     *   如果仍然遇到负时间戳，直接夹到 0，避免 muxer 报错。
-     */
-    if (pts_us < 0) {
-        pts_us = 0;
-    }
-    if (dts_us < 0) {
-        dts_us = pts_us;
-    }
+    // /*
+    //  * 第一版：
+    //  *   header 前音频已经丢弃。
+    //  *   如果仍然遇到负时间戳，直接夹到 0，避免 muxer 报错。
+    //  */
+    // if (pts_us < 0) {
+    //     pts_us = 0;
+    // }
+    // if (dts_us < 0) {
+    //     dts_us = pts_us;
+    // }
 
     avpkt.pts = av_rescale_q(pts_us, input_time_base, stream->time_base);
     avpkt.dts = av_rescale_q(dts_us, input_time_base, stream->time_base);

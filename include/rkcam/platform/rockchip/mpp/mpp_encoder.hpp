@@ -62,6 +62,20 @@ public:
     bool init();
     void close();
 
+    bool requestIdr();
+    /*
+    * 获取“当前编码器配置”对应的 codec header。
+    *
+    * H264:
+    *   返回 Annex-B 格式 SPS/PPS，例如：
+    *
+    *   00 00 00 01 67 ...
+    *   00 00 00 01 68 ...
+    *
+    * 每次动态开始录像时重新获取，
+    * 不跨录像会话缓存。
+    */
+    bool getCodecHeader(std::vector<uint8_t>& header);
     bool encode(const PipelineVideoFrame& frame, EncodedPacket& packet);
 private:
     bool setupEncoder();

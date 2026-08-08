@@ -138,6 +138,11 @@ public:
     void stop();
 
     bool isRunning() const;
+
+    /*-------------------------------*/
+    bool startRecording(const std::string& path);
+    bool stopRecording();
+    RecordingState recordingState() const;
 private:
     bool initStageNodes();
     bool initStageNodeQueues();
@@ -154,6 +159,9 @@ private:
     void clearAllQueues();
 
     void destroy();
+
+
+
 
 private:
     CameraPipelineConfig config_;
@@ -178,6 +186,11 @@ private:
     std::vector<StageNode> nodes_;
 
     std::atomic<bool> running_{false};
+
+
+    MppStage* mpp_stage_ = nullptr;
+    Mp4RecordStage* mp4_record_stage_ = nullptr;
+    std::mutex control_mutex_;
 };
 
 } // namespace rkcam

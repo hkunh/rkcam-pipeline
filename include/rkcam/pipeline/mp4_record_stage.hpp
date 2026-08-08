@@ -12,7 +12,8 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
-
+#include <future>
+#include <chrono>
 struct AVFormatContext;
 struct AVStream;
 
@@ -65,7 +66,7 @@ struct Mp4AudioStreamConfig{
 struct Mp4RecordStageConfig{
     std::string stage_name = "mp4_record";
 
-    std::string output_path;
+    std::string output_path;  //为了支持动态录像，这个路径废弃了，不再由初始配置信息固定传入
 
     Mp4VideoStreamConfig video;
     Mp4AudioStreamConfig audio;
@@ -104,7 +105,25 @@ struct Mp4RecordStageConfig{
 //      */
 //     bool required = true;
 // };
-
+enum class RecordingState{
+    /*
+    *空闲状态，初始化后没有接收到录制命令，会忽略不是command类型的packet
+    */
+    Idle,
+    /*
+     * 已收到开始命令，正在等待第一帧 IDR。
+     */
+    Starting,
+    /*
+     * MP4 header 已写，正在录像。
+     */
+    Recording,
+    /*
+     * 正在写 trailer 并关闭当前文件。
+     */
+    Stopping,
+    Error,
+};
 class Mp4RecordStage : public IStage{
 public:
     Mp4RecordStage(const Mp4RecordStageConfig& config, const std::vector<EncodedPacketInputPort>& input_ports);
@@ -116,15 +135,61 @@ public:
     bool start() override;
     void stop() override;
 
+    /*
+     * beginRecording 返回 true：
+     *   表示 Mux Writer 已接受命令并进入 Starting。
+     *
+     * 此时还没有真正创建 MP4，
+     * 需要等待下一帧 IDR。
+     */
+    bool beginRecording(const std::string& output_path, const std::vector<uint8_t>& video_extradata, const uint64_t request_time_us);
+    /*
+     * 同步等待 Mux Writer 写 trailer 并关闭文件。
+     */
+    bool endRecording();
+    RecordingState recordingState() const;
+    bool isRecording() const
+    {
+        return recordingState() == RecordingState::Recording;
+    }
+
+    std::string currentOutputPath() const;
+
 private:
     enum class InputEventType{
         Packet,
+        Command,
         Eos
+    };
+    enum class RecordCommandType{
+        Begin,
+        End,
+    };
+    struct RecordCommand{
+        RecordCommandType type = RecordCommandType::Begin;
+
+        std::string output_path;
+        /*
+        * 使用和音视频 PTS 相同的 CLOCK_MONOTONIC 时间域。
+        * 防止命令前已经积压的 packet 被写进新文件。
+        */
+        int64_t request_time_us = -1;
+        /*
+        * 控制线程等待 Mux Writer 确认命令。
+        */
+        /*
+        *这里的std::shared_ptr是为了在共享std::promise<bool>变量，因为std::promise是不能拷贝的
+        *std::promise是一种消息传递类，是为了能够在不同线程传递消息，可通过future.get() 挂起等待结果，而不是轮询等其他麻烦的操作
+        */
+        std::shared_ptr<std::promise<bool>> completion; 
+
+        std::vector<uint8_t> video_extradata;
     };
     struct InputEvent{
         InputEventType type = InputEventType::Packet;
         size_t port_index = 0;
         EncodedPacket packet;
+        RecordCommand command;
     };
 
 private:
@@ -169,6 +234,26 @@ private:
     void accountSavedPacket(const EncodedPacket& packet);
 
     void closeMuxer();
+
+    //-------------------------------------------
+    bool postCommandAndWait(RecordCommand&& command);
+    bool handleRecordCommand(RecordCommand&& command);
+    bool beginRecordingInMuxThread(
+        const std::string& output_path,
+        int64_t request_time_us,
+        const std::vector<uint8_t>& video_extradata
+    );
+    bool endRecordingInMuxThread();
+    
+    void resetRecordingSession();
+    
+    /*
+    *检查是否有SPS PPS，没有就从packet中提取SPS PPS并缓存
+    */
+    bool tryUpdateSessionVideoExtradata(const EncodedPacket& packet);
+
+    int64_t packetTimestampUs(const EncodedPacket& packet) const;
+
 
 private:
     Mp4RecordStageConfig config_;
@@ -217,6 +302,32 @@ private:
     int failed_packets_ = 0;
     int dropped_audio_before_header_ = 0;
     
+    /*---------------------------------------*/
+    std::atomic<RecordingState> recording_state_{
+        RecordingState::Idle
+    };
+
+    /*
+     * 只由 Mux Writer 读写。
+     */
+    std::string active_output_path_;
+    int64_t start_request_pts_us_ = -1;
+
+    /*
+    * 当前录像会话的 H.264 extradata。
+    *
+    * 生命周期：
+    *   beginRecording() -> 清空
+    *   Starting -> 从当前编码器输出重新获取
+    *   MP4 header 创建后可以保留到会话结束
+    *   endRecording() -> 清空
+    *
+    * 不允许跨录像会话复用。
+    */
+    std::vector<uint8_t> session_video_extradata_;
+
+    mutable std::mutex state_mutex_;
+    uint64_t idle_dropped_packets_ = 0;
 };
 
 }// namespace rkcam

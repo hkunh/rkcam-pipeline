@@ -12,7 +12,8 @@
 
 #define RKCAM_LOGI(fmt, ...) \
 	std::printf("[INFO] " fmt "\n", ##__VA_ARGS__)
-
+#define RKCAM_LOGW(fmt, ...) \
+	std::printf("[WARNING] " fmt "\n", ##__VA_ARGS__)
 #define RKCAM_LOGE(fmt, ...) \
 	std::fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__)
 

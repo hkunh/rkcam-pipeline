@@ -8,6 +8,17 @@
 namespace rkcam {
 
 namespace{
+static int64_t nowMonotonicUs()
+{
+    timespec ts{};
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    {
+        return -1;
+    }
+    return static_cast<int64_t>(ts.tv_sec) * 1000000LL +
+        static_cast<int64_t>(ts.tv_nsec) / 1000LL;
+}
+
 template <typename T, PipelineQueueValueType TypeValue>
 rkcam::BlockingQueue<T>* getTypeQueue(
     const std::shared_ptr<rkcam::IPipelineQueue>& queue,
@@ -479,7 +490,8 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 mpp_cfg.stage_name = node.config.name;
             }
             node.stage = std::make_unique<MppStage>(mpp_cfg, *in_q, *out_q);
-                RKCAM_LOGI("[%s] create MppStage: %s %s -> %s",
+            mpp_stage_ = dynamic_cast<rkcam::MppStage*>(node.stage.get());
+            RKCAM_LOGI("[%s] create MppStage: %s %s -> %s",
                config_.stream_id.c_str(),
                node.config.name.c_str(),
                node.config.input_queues[0].name.c_str(),
@@ -604,7 +616,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 ++input_index;
             }
             node.stage = std::make_unique<Mp4RecordStage>(mp4_cfg, ports);
-
+            mp4_record_stage_ = dynamic_cast<rkcam::Mp4RecordStage*>(node.stage.get());
             RKCAM_LOGI(
                 "[%s] create Mp4RecordStage: %s "
                 "inputs=%zu video=%d audio=%d output=%s",
@@ -1113,7 +1125,67 @@ void CameraPipeline::destroy(){
     nodes_.clear();
     queue_map_.clear();
 }
+bool CameraPipeline::startRecording(const std::string& output_path)
+{
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    if(!running_ || !mp4_record_stage_ || !mpp_stage_)
+    {
+        return false;
+    }
+    const int64_t request_pts_us = nowMonotonicUs();
+    /*
+     * 1. 从当前 MPP encoder 获取最新 SPS/PPS。
+     *
+     * 如果以后编码参数变了，
+     * 这里得到的也应该是新参数对应的 header。
+     */
+    std::vector<uint8_t> video_extradata;
 
+    if (!mpp_stage_->getCodecHeader(
+            video_extradata)) {
 
+        RKCAM_LOGE(
+            "[%s] startRecording: "
+            "get current H264 header failed",
+            config_.stream_id.c_str());
 
+        return false;
+    }
+
+    /*
+     * beginRecording() 会同步等待 Mux Writer
+     * 真正进入 Starting。
+     */
+    if(!mp4_record_stage_->beginRecording(output_path, video_extradata, request_pts_us))
+    {
+        return false;
+    }
+    /*
+     * Recorder 已经准备好后再请求 IDR，
+     * 避免 IDR 比 Start 命令先到。
+     */
+    if(!mpp_stage_->requestIdr(request_pts_us))
+    {
+        mp4_record_stage_->endRecording();
+        return false;
+    }
+    return true;
+}
+bool CameraPipeline::stopRecording()
+{
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    if(!running_ || !mp4_record_stage_)
+    {
+        return false;
+    }
+    return mp4_record_stage_->endRecording();
+}
+RecordingState CameraPipeline::recordingState() const
+{
+    if (!running_ || !mp4_record_stage_) {
+        return RecordingState::Idle;
+    }
+
+    return mp4_record_stage_->recordingState();
+}
 } // namespace rkcam

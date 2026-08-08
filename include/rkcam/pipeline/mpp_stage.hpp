@@ -35,7 +35,15 @@ public:
 
     bool start() override;
     void stop() override;
-
+    /*
+     * 只提交请求。
+     * 真正的 MPP control 在编码线程中执行。
+     */
+    bool requestIdr(int64_t min_pts_us);
+    /*
+     * 获取当前编码器配置对应的 H264 SPS/PPS Annex-B header。
+     */
+    bool getCodecHeader(std::vector<uint8_t>& header);
 private:
     void threadLoop();
 
@@ -53,6 +61,16 @@ private:
 
     int encoded_packets_ = 0;
     int failed_frames_ = 0;
+
+    /*
+    * -1：没有待处理 IDR 请求
+    * >=0：所有待处理请求要求的最小 frame PTS
+    */
+    std::atomic<int64_t> pending_idr_min_pts_us_{-1};
+
+    uint64_t requested_idr_count_ = 0;
+    uint64_t applied_idr_count_ = 0;
+    uint64_t failed_idr_count_ = 0;
 
 
 
