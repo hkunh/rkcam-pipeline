@@ -95,5 +95,37 @@ CameraService::recordingState() const
 
     return pipeline_.recordingState();
 }
+bool CameraService::startStreaming(
+    const std::string& url)
+{
+    if (!running_) {
+        RKCAM_LOGE(
+            "[camera_service] "
+            "camera is not running");
 
+        return false;
+    }
+
+    return pipeline_.startStreaming(
+        url);
+}
+
+bool CameraService::stopStreaming()
+{
+    if (!running_) {
+        return false;
+    }
+
+    return pipeline_.stopStreaming();
+}
+
+StreamingState
+CameraService::streamingState() const
+{
+    if (!running_) {
+        return StreamingState::Idle;
+    }
+
+    return pipeline_.streamingState();
+}
 } // namespace rkcam

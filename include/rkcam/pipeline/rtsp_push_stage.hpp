@@ -9,12 +9,22 @@
 #include <string>
 #include <thread>
 #include <vector>
-
+#include <deque>
+#include <future>
+#include <mutex>
 struct AVFormatContext;
 struct AVStream;
 struct AVPacket;
 
 namespace rkcam {
+
+enum class StreamingState{
+    Idle,
+    Starting,
+    Streaming,
+    Stopping,
+    Error,
+};
 
 enum class RtspPacketWriteMode {
     /*
@@ -144,15 +154,44 @@ public:
     bool start() override;
     void stop() override;
 
+    /*--------------------------------*/
+    bool beginStreaming(const std::string& url, const std::vector<uint8_t>&video_extradata, int64_t request_pts_us);
+    bool endStreaming();
+    StreamingState streamingState() const;
+    std::string currentUrl() const;
+
 private:
+    enum class StreamCommandType{
+        Begin,
+        End,
+    };
     enum class InputEventType{
         Packet,
+        Command,
         Eos,
+    };
+    struct StreamCommand{
+        StreamCommandType type = StreamCommandType::Begin;
+        std::string url;
+        /*
+        * 当前这次推流 Session 对应的 H264 SPS/PPS。
+        *
+        * 每次 beginStreaming() 都由
+        * MPP_ENC_GET_HDR_SYNC 重新获取。
+        */
+        std::vector<uint8_t> video_extradata;
+        /*
+        * 与录像一样：
+        * 此时间之前已经积压的旧 packet 不进入新 RTSP session。
+        */
+        int64_t request_pts_us = -1;
+        std::shared_ptr<std::promise<bool>> completion;
     };
     struct InputEvent{
         InputEventType type = InputEventType::Packet;
         size_t port_index = 0;
         EncodedPacket packet;
+        StreamCommand command;
     };
 
 private:
@@ -192,6 +231,11 @@ private:
 
     int64_t relativePtsUs(int64_t pts_us) const;
 
+    /*---------------------------------------*/
+    bool beginStreamingInMuxThread(const std::string& url, const std::vector<uint8_t>& video_extradata, int64_t request_pts_us);
+    bool endStreamingInMuxThread();
+    bool initMuxerWithVideoExtradata(const std::vector<uint8_t>& video_extradata, int64_t start_pts_us);
+    bool createVideoStreamFromH264Extradata(const std::vector<uint8_t>& extradata);
 private:
     RtspPushStageConfig config_;
 
@@ -230,11 +274,18 @@ private:
     uint64_t dropped_packets_ = 0;
     uint64_t write_failures_ = 0;
 
+
+
+    /*-----------------------------*/
+    std::atomic<StreamingState> streaming_state_ {StreamingState::Idle};
+    /*
+    * 只属于当前这次推流 Session。
+    */
+    std::string active_url_;
+    std::vector<uint8_t> session_video_extradata_;
+
+    int64_t start_request_pts_us_ = -1;
+    mutable std::mutex state_mutex_;
+    uint64_t idle_dropped_packets_ = 0;
 };
-
-
-
-
-
-
 }

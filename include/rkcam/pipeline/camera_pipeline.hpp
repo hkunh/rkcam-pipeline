@@ -143,6 +143,10 @@ public:
     bool startRecording(const std::string& path);
     bool stopRecording();
     RecordingState recordingState() const;
+
+    bool startStreaming(const std::string& url);
+    bool stopStreaming();
+    StreamingState streamingState() const;
 private:
     bool initStageNodes();
     bool initStageNodeQueues();
@@ -187,9 +191,17 @@ private:
 
     std::atomic<bool> running_{false};
 
-
+    /*---------------------------------------*/
     MppStage* mpp_stage_ = nullptr;
     Mp4RecordStage* mp4_record_stage_ = nullptr;
+    RtspPushStage* rtsp_push_stage_ = nullptr;
+    /*
+     * 串行化录像 / 推流控制操作。
+     *
+     * MPP encoder是录像和推流共享资源，
+     * 所以 startRecording / startStreaming
+     * 都必须经过这个锁协调。
+     */
     std::mutex control_mutex_;
 };
 

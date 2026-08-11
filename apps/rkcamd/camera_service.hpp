@@ -45,6 +45,10 @@ public:
 
     RecordingState recordingState() const;
 
+    bool startStreaming(const std::string& url);
+    bool stopStreaming();
+    StreamingState streamingState() const;
+
 private:
     CameraPipeline pipeline_;
 

@@ -477,12 +477,12 @@ bool RtspPushStage::normalizeAndValidateConfig()
         config_.stage_name = "rtsp_push";
     }
 
-    if (config_.url.empty()) {
-        RKCAM_LOGE(
-            "[%s] url is empty",
-            config_.stage_name.c_str());
-        return false;
-    }
+    // if (config_.url.empty()) {
+    //     RKCAM_LOGE(
+    //         "[%s] url is empty",
+    //         config_.stage_name.c_str());
+    //     return false;
+    // }
     /*
      * 当前RTSP以视频IDR作为统一起点，
      * 因此第一版仍要求开启视频。
@@ -648,8 +648,14 @@ bool RtspPushStage::start()
     pending_audio_packets_.clear();
     input_eos_.assign(input_ports_.size(), false);
 
-    internal_queue_.reset();
+    
+    active_url_.clear();
+    session_video_extradata_.clear();
+    start_request_pts_us_ = -1;
+    idle_dropped_packets_ = 0;
+    streaming_state_.store(StreamingState::Idle, std::memory_order_release);
 
+    internal_queue_.reset();
     running_ = true;
     mux_thread_ = std::thread(&RtspPushStage::muxWriterLoop, this);
 
@@ -664,9 +670,9 @@ bool RtspPushStage::start()
 
 
     RKCAM_LOGI(
-        "[%s] started: url=%s inputs=%zu video=%dx%d@%d audio=%d",
+        "[%s] RtspPushStage ready: "
+        "inputs=%zu video=%dx%d@%d audio=%d state=Idle",
         config_.stage_name.c_str(),
-        config_.url.c_str(),
         input_ports_.size(),
         config_.video.width,
         config_.video.height,
@@ -728,6 +734,89 @@ void RtspPushStage::stop()
             pushed_audio_packets_),
         static_cast<unsigned long long>(dropped_packets_),
         static_cast<unsigned long long>(write_failures_));
+
+}
+bool RtspPushStage::beginStreaming(const std::string& url, const std::vector<uint8_t>& video_extradata, int64_t request_pts_us)
+{
+    if (!running_) {
+        RKCAM_LOGE(
+            "[%s] beginStreaming failed: "
+            "stage not running",
+            config_.stage_name.c_str());
+        return false;
+    }
+
+    if (url.empty()) {
+        RKCAM_LOGE(
+            "[%s] beginStreaming failed: "
+            "url empty",
+            config_.stage_name.c_str());
+        return false;
+    }
+
+    if (video_extradata.empty()) {
+        RKCAM_LOGE(
+            "[%s] beginStreaming failed: "
+            "video extradata empty",
+            config_.stage_name.c_str());
+        return false;
+    }
+
+    if (request_pts_us < 0) {
+        return false;
+    }
+
+    auto completion = std::make_shared<std::promise<bool>>();
+    auto future = completion->get_future();
+
+    StreamCommand command;
+    command.type = StreamCommandType::Begin;
+    command.url = url;
+    command.video_extradata = video_extradata;
+    command.request_pts_us = request_pts_us;
+    command.completion = completion;
+
+    InputEvent event;
+    event.type = InputEventType::Command;
+    event.command = std::move(command);
+    if (!internal_queue_.push(
+            std::move(event))) {
+        return false;
+    }
+    if(future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+    {
+        RKCAM_LOGE(
+            "[%s] beginStreaming command timeout",
+            config_.stage_name.c_str());
+
+        return false;
+    }
+    return future.get();
+}
+bool RtspPushStage::endStreaming()
+{
+    if (!running_) {
+        return false;
+    }
+    auto completion = std::make_shared<std::promise<bool>>();
+    auto future = completion->get_future();
+
+    StreamCommand command;
+    command.type = StreamCommandType::End;
+    command.completion = completion;
+
+    InputEvent event;
+    event.type = InputEventType::Command;
+    event.command = std::move(command);
+    if (!internal_queue_.push(
+            std::move(event))) {
+        return false;
+    }
+    if(future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+    {
+        return false;
+    }
+    return future.get();
 
 }
 
@@ -802,6 +891,30 @@ void RtspPushStage::muxWriterLoop()
         if(!internal_queue_.pop(event))  //这个pop是阻塞的
         {
             break;
+        }
+        if(event.type == InputEventType::Command)
+        {
+            auto completion = event.command.completion;
+            bool ok = false;
+            if(event.command.type == StreamCommandType::Begin)
+            {
+                ok = beginStreamingInMuxThread(event.command.url, event.command.video_extradata, event.command.request_pts_us);
+            }
+            else{
+                ok = endStreamingInMuxThread();
+            }
+            
+            if(completion)
+            {
+                try{
+                    completion->set_value(ok);
+                }
+                catch(...)
+                {
+
+                }
+            }
+            continue;
         }
         if(event.type == InputEventType::Eos)
         {
@@ -964,6 +1077,83 @@ void RtspPushStage::muxWriterLoop()
 //                dropped_packets_,
 //                write_failures_);
 // }
+StreamingState RtspPushStage::streamingState() const
+{
+    return streaming_state_.load(std::memory_order_acquire);
+}
+bool RtspPushStage::beginStreamingInMuxThread(
+    const std::string& url,
+    const std::vector<uint8_t>& video_extradata,
+    int64_t request_pts_us)
+{
+    const StreamingState state = streamingState();
+    if (state != StreamingState::Idle &&
+        state != StreamingState::Error) {
+
+        RKCAM_LOGE(
+            "[%s] begin streaming rejected: state=%d",
+            config_.stage_name.c_str(),
+            static_cast<int>(state));
+
+        return false;
+    }
+    /*
+     * 防御性清掉上一个 Session。
+     */
+    closeMuxer();
+    pending_audio_packets_.clear();
+
+    first_pts_us_ = -1;
+    last_video_dts_ = INT64_MIN;
+    last_audio_dts_ = INT64_MIN;
+    header_written_ = false;
+
+    active_url_ = url;
+
+    session_video_extradata_ = video_extradata;
+    start_request_pts_us_ = request_pts_us;
+    streaming_state_.store(StreamingState::Starting, std::memory_order_release);
+    RKCAM_LOGI(
+        "[%s] streaming Starting: "
+        "url=%s request_pts=%lld video_extra=%zu",
+        config_.stage_name.c_str(),
+        active_url_.c_str(),
+        static_cast<long long>(
+            start_request_pts_us_),
+        session_video_extradata_.size());
+
+    return true;
+
+}
+
+bool RtspPushStage::endStreamingInMuxThread()
+{
+    const StreamingState state = streamingState();
+    if(state == StreamingState::Idle)
+    {
+        return true;
+    }
+    streaming_state_.store(StreamingState::Stopping, std::memory_order_release);
+    /*
+     * av_write_trailer + 释放RTSP连接。
+     *
+     * Reader线程和MuxWriter线程不退出。
+     */
+    closeMuxer();
+    pending_audio_packets_.clear();
+    session_video_extradata_.clear();
+
+    active_url_.clear();
+    start_request_pts_us_ = -1;
+    streaming_state_.store(StreamingState::Idle, std::memory_order_release);
+    RKCAM_LOGI(
+        "[%s] streaming stopped",
+        config_.stage_name.c_str());
+
+    return true;
+
+}
+
 bool RtspPushStage::validatePacketForPort(
     const EncodedPacketInputPort& port,
     const EncodedPacket& packet) const
@@ -1021,19 +1211,71 @@ bool RtspPushStage::handleInputPacket(size_t port_index, EncodedPacket&& packet)
         ++dropped_packets_;
         return true;
     }
-    if(!header_written_)
-    {
-        return handlePacketBeforeHeader(std::move(packet));
+
+
+    const StreamingState state = streamingState();
+
+    /*
+     * Stage线程虽然存在，
+     * 但当前没有推流Session。
+     *
+     * 必须继续消费队列，否则Tee会被堵住。
+     */
+    if (state == StreamingState::Idle ||
+        state == StreamingState::Stopping ||
+        state == StreamingState::Error) {
+
+        ++idle_dropped_packets_;
+        return true;
     }
-    //验证pts dts合法性
     const int64_t timestamp_us =
         packetTimestampUs(packet);
+
     if (timestamp_us < 0) {
-        RKCAM_LOGE(
-            "[%s] invalid packet timestamp",
-            config_.stage_name.c_str());
         return false;
     }
+    /*
+     * Begin命令之前已经积压在：
+     *   Tee queue
+     *   Reader
+     *   internal_queue
+     *
+     * 中的旧packet不能进入新的RTSP Session。
+     */
+    if(state == StreamingState::Starting && 
+        start_request_pts_us_ >= 0 &&
+        timestamp_us < start_request_pts_us_)
+    {
+        ++idle_dropped_packets_;
+        return true;
+    }
+
+
+    if(state == StreamingState::Starting)
+    {
+        const bool ok = handlePacketBeforeHeader(std::move(packet));
+
+        if (ok && header_written_) {
+            streaming_state_.store(
+                StreamingState::Streaming,
+                std::memory_order_release);
+            RKCAM_LOGI(
+                "[%s] streaming Running: "
+                "url=%s start_pts=%lld",
+                config_.stage_name.c_str(),
+                active_url_.c_str(),
+                static_cast<long long>(
+                    first_pts_us_));
+        }
+
+        return ok;
+    }
+
+
+
+    /*
+     * 正式Streaming。
+     */
     /*
      * 两个reader调度顺序不确定。
      * header写完后仍可能晚到一包起点以前的AAC。
@@ -1052,6 +1294,13 @@ bool RtspPushStage::handleInputPacket(size_t port_index, EncodedPacket&& packet)
 }
 bool RtspPushStage::handlePacketBeforeHeader(EncodedPacket&& packet)
 {
+    const int64_t timestamp_us =
+        packetTimestampUs(packet);
+
+    if (timestamp_us < 0) {
+        ++dropped_packets_;
+        return true;
+    }
     if(packet.media_type == MediaType::Audio)
     {
         if(!config_.audio.enabled)
@@ -1081,101 +1330,237 @@ bool RtspPushStage::handlePacketBeforeHeader(EncodedPacket&& packet)
         ++dropped_packets_;
         return true;
     }
+    // /*
+    //  * 当前MPP应当在IDR前携带SPS/PPS。
+    //  */
+    // if(!initMuxerFromVideoPacket(packet))
+    // {
+    //     ++dropped_packets_;
+    //     return true;
+    // }
     /*
-     * 当前MPP应当在IDR前携带SPS/PPS。
+     * SPS/PPS已经在beginStreaming时，
+     * 从当前MPP encoder主动获取。
      */
-    if(!initMuxerFromVideoPacket(packet))
+    if (session_video_extradata_.empty()) {
+        RKCAM_LOGE(
+            "[%s] streaming has no H264 extradata",
+            config_.stage_name.c_str());
+
+        return false;
+    }
+    if(!initMuxerWithVideoExtradata(session_video_extradata_, timestamp_us))
     {
-        ++dropped_packets_;
-        return true;
+        return false;
     }
     return flushPendingAudio(std::move(packet));
 }
-bool RtspPushStage::initMuxerFromVideoPacket(const EncodedPacket& packet)
+bool RtspPushStage::initMuxerWithVideoExtradata(const std::vector<uint8_t>& video_extradata, int64_t start_pts_us)
 {
-    if(header_written_)
-    {
+    if (header_written_) {
         return true;
     }
-    std::vector<uint8_t> sps;
-    std::vector<uint8_t> pps;
 
-    if(!extractSpsPpsFromAnnexB(packet, sps, pps))
-    {
-        RKCAM_LOGE("[%s] wait H264 SPS/PPS packet, pts=%lld size=%zu",
-                   config_.stage_name.c_str(),
-                   static_cast<long long>(packet.pts_us),
-                   packet.size());
+    if (active_url_.empty()) {
         return false;
     }
 
-    int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "rtsp", config_.url.c_str());
+    if (video_extradata.empty()) {
+        return false;
+    }
+
+    int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "rtsp", active_url_.c_str());
     if (ret < 0 || !fmt_ctx_) {
-        RKCAM_LOGE("[%s] avformat_alloc_output_context2 failed: %s",
-                   config_.stage_name.c_str(),
-                   ffmpegErrorToString(ret).c_str());
+        RKCAM_LOGE(
+            "[%s] alloc RTSP context failed: %s",
+            config_.stage_name.c_str(),
+            ffmpegErrorToString(ret).c_str());
+
         return false;
     }
-    if(!createVideoStreamFromH264(sps, pps))
-    {
-        RKCAM_LOGE("[%s] createVideoStreamFromH264 failed",
-                   config_.stage_name.c_str());
+    if (!createVideoStreamFromH264Extradata(
+            video_extradata)) {
+
         closeMuxer();
         return false;
     }
+
     if (config_.audio.enabled) {
         if (!createAudioStream()) {
-            RKCAM_LOGE("[%s] createAudioStream failed",
-                       config_.stage_name.c_str());
             closeMuxer();
             return false;
         }
     }
     /*
-     * 音频暂时停止时，禁止interleaver长期等待。
+     * FFmpeg音视频交织最长允许缓存时间。
      */
     fmt_ctx_->max_interleave_delta = config_.max_interleave_delta_us;
     fmt_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;
-
     AVDictionary* options = nullptr;
     av_dict_set(&options, "rtsp_transport", config_.rtsp_over_tcp ? "tcp" : "udp", 0);
-    /*
-     * 降低 muxer 缓冲倾向。
-     * 不同 FFmpeg 版本对这些选项支持略有差异。
-     */
     av_dict_set(&options, "muxdelay", "0", 0);
-    // av_dict_set(&options, "fflags", "nobuffer", 0);
     av_dict_set(&options, "flush_packets", "1", 0);
-
     const std::string packet_size = std::to_string(config_.rtp_packet_size);
     av_dict_set(&options, "pkt_size", packet_size.c_str(), 0);
-
-    // RKCAM_LOGI("[%s] RTSP init befor avformat_write_header",config_.stage_name.c_str());
     ret = avformat_write_header(fmt_ctx_, &options);
     av_dict_free(&options);
     if (ret < 0) {
-        RKCAM_LOGE("[%s] avformat_write_header failed: %s url=%s",
-                   config_.stage_name.c_str(),
-                   ffmpegErrorToString(ret).c_str(),
-                   config_.url.c_str());
+        RKCAM_LOGE(
+            "[%s] RTSP connect failed: %s url=%s",
+            config_.stage_name.c_str(),
+            ffmpegErrorToString(ret).c_str(),
+            active_url_.c_str());
+
         closeMuxer();
         return false;
     }
+    first_pts_us_ =
+        start_pts_us;
 
-    first_pts_us_ = packet.pts_us >= 0 ? packet.pts_us : 0;
     header_written_ = true;
+
     RKCAM_LOGI(
-        "[%s] RTSP initialized: url=%s video=%dx%d@%d "
-        "audio=%d start_pts=%lld",
+        "[%s] RTSP session initialized: "
+        "url=%s start_pts=%lld",
         config_.stage_name.c_str(),
-        config_.url.c_str(),
-        config_.video.width,
-        config_.video.height,
-        config_.video.fps,
-        config_.audio.enabled ? 1 : 0,
-        static_cast<long long>(first_pts_us_));
+        active_url_.c_str(),
+        static_cast<long long>(
+            first_pts_us_));
+
     return true;
 }
+bool RtspPushStage::createVideoStreamFromH264Extradata(const std::vector<uint8_t>& extradata)
+{
+    if (!fmt_ctx_ ||
+        extradata.empty()) {
+        return false;
+    }
+    video_stream_ = avformat_new_stream(fmt_ctx_, nullptr);
+    if (!video_stream_) {
+        return false;
+    }
+    video_stream_->time_base = AVRational{1, 90000};
+    video_stream_->avg_frame_rate = AVRational{config_.video.fps, 1};
+    video_stream_->r_frame_rate = AVRational{config_.video.fps, 1};
+    
+    AVCodecParameters* par = video_stream_->codecpar;
+    par->codec_type = AVMEDIA_TYPE_VIDEO;
+    par->codec_id = AV_CODEC_ID_H264;
+    par->codec_tag = 0;
+    par->width = config_.video.width;
+    par->height = config_.video.height;
+    par->format = AV_PIX_FMT_NONE;
+    /*
+     * MPP_ENC_GET_HDR_SYNC 对 H264 返回Annex-B：
+     *
+     * 00 00 00 01 SPS
+     * 00 00 00 01 PPS
+     *
+     * 你之前已经验证：
+     * RTSP这里不能错误地使用AVCC extradata。
+     */
+    par->extradata = static_cast<uint8_t*>(av_mallocz(extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!par->extradata) {
+        return false;
+    }
+
+    std::memcpy(
+        par->extradata,
+        extradata.data(),
+        extradata.size());
+
+    par->extradata_size =
+        static_cast<int>(
+            extradata.size());
+
+    return true;
+}
+// bool RtspPushStage::initMuxerFromVideoPacket(const EncodedPacket& packet)
+// {
+//     //改成动态推流后，已经废弃掉，直接每次推流额冲编码器获取新的sps pps
+//     if(header_written_)
+//     {
+//         return true;
+//     }
+//     std::vector<uint8_t> sps;
+//     std::vector<uint8_t> pps;
+
+//     if(!extractSpsPpsFromAnnexB(packet, sps, pps))
+//     {
+//         RKCAM_LOGE("[%s] wait H264 SPS/PPS packet, pts=%lld size=%zu",
+//                    config_.stage_name.c_str(),
+//                    static_cast<long long>(packet.pts_us),
+//                    packet.size());
+//         return false;
+//     }
+
+//     int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "rtsp", config_.url.c_str());
+//     if (ret < 0 || !fmt_ctx_) {
+//         RKCAM_LOGE("[%s] avformat_alloc_output_context2 failed: %s",
+//                    config_.stage_name.c_str(),
+//                    ffmpegErrorToString(ret).c_str());
+//         return false;
+//     }
+//     if(!createVideoStreamFromH264(sps, pps))
+//     {
+//         RKCAM_LOGE("[%s] createVideoStreamFromH264 failed",
+//                    config_.stage_name.c_str());
+//         closeMuxer();
+//         return false;
+//     }
+//     if (config_.audio.enabled) {
+//         if (!createAudioStream()) {
+//             RKCAM_LOGE("[%s] createAudioStream failed",
+//                        config_.stage_name.c_str());
+//             closeMuxer();
+//             return false;
+//         }
+//     }
+//     /*
+//      * 音频暂时停止时，禁止interleaver长期等待。
+//      */
+//     fmt_ctx_->max_interleave_delta = config_.max_interleave_delta_us;
+//     fmt_ctx_->flags |= AVFMT_FLAG_FLUSH_PACKETS;
+
+//     AVDictionary* options = nullptr;
+//     av_dict_set(&options, "rtsp_transport", config_.rtsp_over_tcp ? "tcp" : "udp", 0);
+//     /*
+//      * 降低 muxer 缓冲倾向。
+//      * 不同 FFmpeg 版本对这些选项支持略有差异。
+//      */
+//     av_dict_set(&options, "muxdelay", "0", 0);
+//     // av_dict_set(&options, "fflags", "nobuffer", 0);
+//     av_dict_set(&options, "flush_packets", "1", 0);
+
+//     const std::string packet_size = std::to_string(config_.rtp_packet_size);
+//     av_dict_set(&options, "pkt_size", packet_size.c_str(), 0);
+
+//     // RKCAM_LOGI("[%s] RTSP init befor avformat_write_header",config_.stage_name.c_str());
+//     ret = avformat_write_header(fmt_ctx_, &options);
+//     av_dict_free(&options);
+//     if (ret < 0) {
+//         RKCAM_LOGE("[%s] avformat_write_header failed: %s url=%s",
+//                    config_.stage_name.c_str(),
+//                    ffmpegErrorToString(ret).c_str(),
+//                    config_.url.c_str());
+//         closeMuxer();
+//         return false;
+//     }
+
+//     first_pts_us_ = packet.pts_us >= 0 ? packet.pts_us : 0;
+//     header_written_ = true;
+//     RKCAM_LOGI(
+//         "[%s] RTSP initialized: url=%s video=%dx%d@%d "
+//         "audio=%d start_pts=%lld",
+//         config_.stage_name.c_str(),
+//         config_.url.c_str(),
+//         config_.video.width,
+//         config_.video.height,
+//         config_.video.fps,
+//         config_.audio.enabled ? 1 : 0,
+//         static_cast<long long>(first_pts_us_));
+//     return true;
+// }
 
 bool RtspPushStage::flushPendingAudio(EncodedPacket&& first_video_packet)
 {
@@ -1220,59 +1605,60 @@ bool RtspPushStage::flushPendingAudio(EncodedPacket&& first_video_packet)
     return true;
 }
 
-bool RtspPushStage::createVideoStreamFromH264(
-    const std::vector<uint8_t>& sps,
-    const std::vector<uint8_t>& pps)
-{
-    if (!fmt_ctx_) {
-        return false;
-    }
-    std::vector<uint8_t> extradata;
-    if(!buildAnnexBExtradata(sps, pps, extradata))
-    {
-        RKCAM_LOGE("[%s] buildAvccExtradata failed",
-                   config_.stage_name.c_str());
-        return false;
-    }
+// bool RtspPushStage::createVideoStreamFromH264(
+//     const std::vector<uint8_t>& sps,
+//     const std::vector<uint8_t>& pps)
+// {
+//     //已经废弃掉，不需要从packet提取sps pps
+//     if (!fmt_ctx_) {
+//         return false;
+//     }
+//     std::vector<uint8_t> extradata;
+//     if(!buildAnnexBExtradata(sps, pps, extradata))
+//     {
+//         RKCAM_LOGE("[%s] buildAvccExtradata failed",
+//                    config_.stage_name.c_str());
+//         return false;
+//     }
 
-    video_stream_ = avformat_new_stream(fmt_ctx_, nullptr);
-    if (!video_stream_) {
-        RKCAM_LOGE("[%s] avformat_new_stream video failed",
-                   config_.stage_name.c_str());
-        return false;
-    }
+//     video_stream_ = avformat_new_stream(fmt_ctx_, nullptr);
+//     if (!video_stream_) {
+//         RKCAM_LOGE("[%s] avformat_new_stream video failed",
+//                    config_.stage_name.c_str());
+//         return false;
+//     }
 
-    /*
-     * RTP H264 常用 90kHz clock。
-     */
-    // r_frame_rate 的本质是 “用来渲染和解码的参考帧率”：
-    // 你写视频（Muxing）时：你必须主动设值。为了防止变帧率视频在流畅阶段卡顿，你要把它的性能上限（最大帧率）填进去。
-    // 你读视频（Demuxing）时：由 FFmpeg 自动计算并填值。你直接去读它，拿到的就是当前网络或文件里算出来的实际实时帧率。
-    video_stream_->time_base = AVRational{1, 90000};
-    video_stream_->avg_frame_rate = AVRational{config_.video.fps, 1};
-    video_stream_->r_frame_rate = AVRational{config_.video.fps, 1};
+//     /*
+//      * RTP H264 常用 90kHz clock。
+//      */
+//     // r_frame_rate 的本质是 “用来渲染和解码的参考帧率”：
+//     // 你写视频（Muxing）时：你必须主动设值。为了防止变帧率视频在流畅阶段卡顿，你要把它的性能上限（最大帧率）填进去。
+//     // 你读视频（Demuxing）时：由 FFmpeg 自动计算并填值。你直接去读它，拿到的就是当前网络或文件里算出来的实际实时帧率。
+//     video_stream_->time_base = AVRational{1, 90000};
+//     video_stream_->avg_frame_rate = AVRational{config_.video.fps, 1};
+//     video_stream_->r_frame_rate = AVRational{config_.video.fps, 1};
 
-    AVCodecParameters* par = video_stream_->codecpar;
-    par->codec_type = AVMEDIA_TYPE_VIDEO;
-    par->codec_id = AV_CODEC_ID_H264;
-    par->width = config_.video.width;
-    par->height = config_.video.height;
-    par->codec_tag = 0;
-    par->format = AV_PIX_FMT_NONE;
+//     AVCodecParameters* par = video_stream_->codecpar;
+//     par->codec_type = AVMEDIA_TYPE_VIDEO;
+//     par->codec_id = AV_CODEC_ID_H264;
+//     par->width = config_.video.width;
+//     par->height = config_.video.height;
+//     par->codec_tag = 0;
+//     par->format = AV_PIX_FMT_NONE;
 
-    par->extradata = static_cast<uint8_t*>(av_mallocz(extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
-    if (!par->extradata) {
-        RKCAM_LOGE("[%s] av_mallocz video extradata failed",
-                   config_.stage_name.c_str());
-        return false;
-    }
-    std::memcpy(par->extradata, extradata.data(), extradata.size());
-    par->extradata_size = static_cast<int>(extradata.size());
+//     par->extradata = static_cast<uint8_t*>(av_mallocz(extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+//     if (!par->extradata) {
+//         RKCAM_LOGE("[%s] av_mallocz video extradata failed",
+//                    config_.stage_name.c_str());
+//         return false;
+//     }
+//     std::memcpy(par->extradata, extradata.data(), extradata.size());
+//     par->extradata_size = static_cast<int>(extradata.size());
 
-    return true;
+//     return true;
 
 
-}
+// }
 
 
 bool RtspPushStage::createAudioStream()

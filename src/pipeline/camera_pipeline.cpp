@@ -181,6 +181,9 @@ bool CameraPipeline::isRunning() const
 }
 
 bool CameraPipeline::initStageNodes(){
+    mpp_stage_ = nullptr;
+    mp4_record_stage_ = nullptr;
+    rtsp_push_stage_ = nullptr;
     nodes_.clear();
     queue_map_.clear();
 
@@ -731,6 +734,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 ++input_index;
             }
             node.stage = std::make_unique<RtspPushStage>(rtsp_cfg, ports);
+            rtsp_push_stage_ = dynamic_cast<rkcam::RtspPushStage*>(node.stage.get());
             RKCAM_LOGI(
                 "[%s] create RtspPushStage: %s "
                 "inputs=%zu video=%s audio=%s audio_enabled=%d url=%s",
@@ -1114,6 +1118,13 @@ void CameraPipeline::clearAllQueues(){
 }
 
 void CameraPipeline::destroy(){
+    /*
+     * 这些都是指向node.stage对象的非拥有指针。
+     * node.stage释放以后必须清空。
+     */
+    mpp_stage_ = nullptr;
+    mp4_record_stage_ = nullptr;
+    rtsp_push_stage_ = nullptr;
     for (auto& node : nodes_) {
         node.stage.reset();
         node.input_queues.clear();
@@ -1188,4 +1199,183 @@ RecordingState CameraPipeline::recordingState() const
 
     return mp4_record_stage_->recordingState();
 }
+bool CameraPipeline::startStreaming(const std::string& url)
+{
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    if (!running_) {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "pipeline not running",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    if (!rtsp_push_stage_) {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "RtspPushStage unavailable",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    if (!mpp_stage_) {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "MppStage unavailable",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+    if (url.empty()) {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "url empty",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    /*
+     * 已经正在启动或推流，
+     * 不允许重复创建第二个RTSP session。
+     */    
+     const StreamingState state = rtsp_push_stage_->streamingState();
+    if (state != StreamingState::Idle &&
+        state != StreamingState::Error) {
+
+        RKCAM_LOGE(
+            "[%s] startStreaming rejected: "
+            "current state=%d",
+            config_.stream_id.c_str(),
+            static_cast<int>(state));
+
+        return false;
+    }
+
+    /*
+     * ============================================================
+     * 1. 给RTSP和MPP使用同一个时间边界
+     * ============================================================
+     */
+    const int64_t request_pts_us =
+        nowMonotonicUs();
+
+    if (request_pts_us < 0) {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "get monotonic time failed",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    /*
+     * ============================================================
+     * 2. 每次推流重新获取当前MPP H264 SPS/PPS
+     * ============================================================
+     */
+    std::vector<uint8_t> video_extradata;
+    if(!mpp_stage_->getCodecHeader(video_extradata))
+    {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "get current H264 header failed",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+    /*
+     * ============================================================
+     * 3. 先让RTSP进入Starting
+     *
+     * 这样新的IDR到达时，
+     * RTSP Stage已经准备好接收。
+     * ============================================================
+     */
+    if(!rtsp_push_stage_->beginStreaming(url, video_extradata, request_pts_us)){
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "RtspPushStage beginStreaming failed",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+    /*
+     * ============================================================
+     * 4. 再请求第一帧PTS >= request_pts的帧成为IDR
+     *
+     * 和动态录像共用同一个MppStage请求机制。
+     * ============================================================
+     */
+    if(!mpp_stage_->requestIdr(request_pts_us))
+    {
+        RKCAM_LOGE(
+            "[%s] startStreaming failed: "
+            "request IDR failed",
+            config_.stream_id.c_str());
+
+        /*
+         * 回滚RTSP Session。
+         */
+        rtsp_push_stage_->
+            endStreaming();
+
+        return false;
+    }
+    RKCAM_LOGI(
+        "[%s] streaming start requested: "
+        "url=%s request_pts=%lld",
+        config_.stream_id.c_str(),
+        url.c_str(),
+        static_cast<long long>(
+            request_pts_us));
+
+    return true;
+}
+
+bool CameraPipeline::stopStreaming()
+{
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    if (!running_) {
+        RKCAM_LOGE(
+            "[%s] stopStreaming failed: "
+            "pipeline not running",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    if (!rtsp_push_stage_) {
+        RKCAM_LOGE(
+            "[%s] stopStreaming failed: "
+            "RtspPushStage unavailable",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+
+    /*
+     * endStreaming()只关闭当前RTSP Session：
+     *
+     *   av_write_trailer
+     *   free AVFormatContext
+     *   disconnect MediaMTX
+     *
+     * RtspPushStage的Reader/Mux线程继续运行。
+     */
+    return rtsp_push_stage_->
+        endStreaming();
+}
+StreamingState CameraPipeline::streamingState() const
+{
+    if (!running_ ||
+        !rtsp_push_stage_) {
+
+        return StreamingState::Idle;
+    }
+    return rtsp_push_stage_->streamingState();
+}
+
 } // namespace rkcam

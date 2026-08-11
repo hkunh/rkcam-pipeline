@@ -175,46 +175,46 @@ int main()
      * 能重新创建第二个独立MP4会话。
      * ============================================================
      */
-    const std::string record_file_2 =
-        "/userdata/rkcam/output/"
-        "dynamic_record_02.mp4";
+    // const std::string record_file_2 =
+    //     "/userdata/rkcam/output/"
+    //     "dynamic_record_02.mp4";
 
-    RKCAM_LOGI(
-        "[test] start recording #2");
+    // RKCAM_LOGI(
+    //     "[test] start recording #2");
 
-    if (!camera_service.startRecording(
-            record_file_2)) {
+    // if (!camera_service.startRecording(
+    //         record_file_2)) {
 
-        RKCAM_LOGE(
-            "[test] recording #2 start failed");
+    //     RKCAM_LOGE(
+    //         "[test] recording #2 start failed");
 
-        camera_service.stop();
-        return 1;
-    }
+    //     camera_service.stop();
+    //     return 1;
+    // }
 
-    sleepSeconds(1);
+    // sleepSeconds(1);
 
-    RKCAM_LOGI(
-        "[test] recording #2 state=%d",
-        static_cast<int>(
-            camera_service.recordingState()));
+    // RKCAM_LOGI(
+    //     "[test] recording #2 state=%d",
+    //     static_cast<int>(
+    //         camera_service.recordingState()));
 
-    if (!sleepSeconds(9)) {
-        camera_service.stop();
-        return 0;
-    }
+    // if (!sleepSeconds(9)) {
+    //     camera_service.stop();
+    //     return 0;
+    // }
 
-    RKCAM_LOGI(
-        "[test] stop recording #2");
+    // RKCAM_LOGI(
+    //     "[test] stop recording #2");
 
-    if (!camera_service.stopRecording()) {
+    // if (!camera_service.stopRecording()) {
 
-        RKCAM_LOGE(
-            "[test] recording #2 stop failed");
+    //     RKCAM_LOGE(
+    //         "[test] recording #2 stop failed");
 
-        camera_service.stop();
-        return 1;
-    }
+    //     camera_service.stop();
+    //     return 1;
+    // }
 
     /*
      * ============================================================
@@ -226,6 +226,55 @@ int main()
         "preview another 3 seconds");
 
     sleepSeconds(3);
+
+
+    RKCAM_LOGI(
+        "[test] start streaming #1");
+
+    if (!camera_service.startStreaming(
+            "rtsp://192.168.56.100:8554/live")) {
+
+        RKCAM_LOGE(
+            "[test] streaming #1 start failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+    sleepSeconds(1);
+
+    RKCAM_LOGI(
+        "[test] streaming #1 state=%d",
+        static_cast<int>(
+            camera_service.streamingState()));
+
+    sleepSeconds(9);
+
+    RKCAM_LOGI(
+        "[test] stop streaming #1");
+
+    camera_service.stopStreaming();
+
+    /*
+    * 只预览3秒。
+    */
+    sleepSeconds(3);
+
+    /*
+    * 再推一次。
+    */
+    RKCAM_LOGI(
+        "[test] start streaming #2");
+
+    camera_service.startStreaming(
+        "rtsp://192.168.56.100:8554/live");
+
+    sleepSeconds(30);
+
+    camera_service.stopStreaming();
+
+    sleepSeconds(3);
+
 
     /*
      * ============================================================
