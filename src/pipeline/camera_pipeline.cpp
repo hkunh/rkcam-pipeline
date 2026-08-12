@@ -103,6 +103,25 @@ bool CameraPipeline::start()
         destroy();
         return false;
     }
+    /*
+     * 初始业务状态：
+     *
+     * Pipeline启动后先只有Preview。
+     */
+    {
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        recording_requested_ = false;
+        streaming_requested_ = false;
+
+        if(video_frame_tee_stage_ && !config_.video_encode_output_queue_name.empty())
+        {
+            if(!video_frame_tee_stage_->setOutputEnabled(config_.video_encode_output_queue_name, false))
+            {
+                destroy();
+                return false;
+            }
+        }
+    }
     if(!startStages())
     {
         RKCAM_LOGE("[%s] startStages failed",
@@ -619,7 +638,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 ++input_index;
             }
             node.stage = std::make_unique<Mp4RecordStage>(mp4_cfg, ports);
-            mp4_record_stage_ = dynamic_cast<rkcam::Mp4RecordStage*>(node.stage.get());
+            mp4_record_stage_ = static_cast<rkcam::Mp4RecordStage*>(node.stage.get());
             RKCAM_LOGI(
                 "[%s] create Mp4RecordStage: %s "
                 "inputs=%zu video=%d audio=%d output=%s",
@@ -734,7 +753,7 @@ bool CameraPipeline::createStageForNode(StageNode& node)
                 ++input_index;
             }
             node.stage = std::make_unique<RtspPushStage>(rtsp_cfg, ports);
-            rtsp_push_stage_ = dynamic_cast<rkcam::RtspPushStage*>(node.stage.get());
+            rtsp_push_stage_ = static_cast<rkcam::RtspPushStage*>(node.stage.get());
             RKCAM_LOGI(
                 "[%s] create RtspPushStage: %s "
                 "inputs=%zu video=%s audio=%s audio_enabled=%d url=%s",
@@ -789,26 +808,52 @@ bool CameraPipeline::createStageForNode(StageNode& node)
             if (!in_q) {
                 return false;
             }
-            std::vector<BlockingQueue<PipelineVideoFrame>*> out_queues;
-            for(const auto& output_box : node.output_queues)
+
+            // std::vector<BlockingQueue<PipelineVideoFrame>*> out_queues;
+            // for(const auto& output_box : node.output_queues)
+            // {
+            //     auto* out_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(output_box, node.config.name);
+            //     if (!out_q) {
+            //         return false;
+            //     }
+
+            //     out_queues.push_back(out_q);
+            // }
+
+            std::vector<VideoFrameTeeOutputPort> ports;
+            ports.reserve(node.output_queues.size());
+
+            for(size_t i = 0; i < node.output_queues.size(); ++i)
             {
-                auto* out_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(output_box, node.config.name);
-                if (!out_q) {
+                auto* out_q = getTypeQueue<PipelineVideoFrame, PipelineQueueValueType::PipelineVideoFrame>(node.output_queues[i], node.config.name);
+                if(!out_q)
+                {
                     return false;
                 }
 
-                out_queues.push_back(out_q);
+                VideoFrameTeeOutputPort port;
+                /*
+                * 用PipelineQueueConfig.name作为稳定标识。
+                */
+                port.name = node.config.output_queues[i].name;
+                port.queue = out_q;
+                port.enabled = true;
+                ports.push_back(std::move(port));
             }
+
+
+
             VideoFrameTeeStageConfig tee_cfg = node.config.video_frame_tee;
             if (tee_cfg.stage_name.empty()) {
                 tee_cfg.stage_name = node.config.name;
             }
 
-            node.stage = std::make_unique<VideoFrameTeeStage>(tee_cfg, *in_q, out_queues);
+            node.stage = std::make_unique<VideoFrameTeeStage>(tee_cfg, *in_q, ports);
+            video_frame_tee_stage_ = static_cast<rkcam::VideoFrameTeeStage*>(node.stage.get());
             RKCAM_LOGI("[%s] create VideoFrameTeeStage: %s outputs=%zu",
                     config_.stream_id.c_str(),
                     node.config.name.c_str(),
-                    out_queues.size());
+                    ports.size());
 
             return true;
         }
@@ -1125,6 +1170,12 @@ void CameraPipeline::destroy(){
     mpp_stage_ = nullptr;
     mp4_record_stage_ = nullptr;
     rtsp_push_stage_ = nullptr;
+
+    config_.video_encode_output_queue_name.clear();
+
+    recording_requested_ = false;
+    streaming_requested_ = false;
+
     for (auto& node : nodes_) {
         node.stage.reset();
         node.input_queues.clear();
@@ -1171,6 +1222,13 @@ bool CameraPipeline::startRecording(const std::string& output_path)
     {
         return false;
     }
+
+    /*
+     * 从现在开始，录像对video encode branch有需求。
+     */
+    recording_requested_ = true;
+
+
     /*
      * Recorder 已经准备好后再请求 IDR，
      * 避免 IDR 比 Start 命令先到。
@@ -1180,7 +1238,21 @@ bool CameraPipeline::startRecording(const std::string& output_path)
         mp4_record_stage_->endRecording();
         return false;
     }
+
+    /*
+     * 最后才开始给RGA/MPP送新frame。
+     *
+     * 如果RTSP本来已经在推，
+     * 当前Gate本来就是ON，这里不会重复操作。
+     */
+    if(!updateVideoEncodeBranchState())
+    {
+        recording_requested_ = false;
+        mp4_record_stage_->endRecording();
+        return false;
+    }
     return true;
+
 }
 bool CameraPipeline::stopRecording()
 {
@@ -1189,7 +1261,30 @@ bool CameraPipeline::stopRecording()
     {
         return false;
     }
-    return mp4_record_stage_->endRecording();
+    if(!mp4_record_stage_->endRecording())
+    {
+        return false;
+    }
+    recording_requested_ = false;
+    /*
+     * 如果RTSP仍然Streaming：
+     *   needed=true
+     *   MPP继续工作
+     *
+     * 如果RTSP也关闭：
+     *   needed=false
+     *   Gate关闭
+     */
+    if(!updateVideoEncodeBranchState())
+    {
+        RKCAM_LOGE(
+            "[%s] stopRecording: "
+            "update encode gate failed",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+    return true;
 }
 RecordingState CameraPipeline::recordingState() const
 {
@@ -1253,6 +1348,7 @@ bool CameraPipeline::startStreaming(const std::string& url)
 
         return false;
     }
+    
 
     /*
      * ============================================================
@@ -1302,6 +1398,7 @@ bool CameraPipeline::startStreaming(const std::string& url)
 
         return false;
     }
+    streaming_requested_ = true;
     /*
      * ============================================================
      * 4. 再请求第一帧PTS >= request_pts的帧成为IDR
@@ -1324,6 +1421,19 @@ bool CameraPipeline::startStreaming(const std::string& url)
 
         return false;
     }
+    /*
+     * 最后打开编码数据源。
+     */
+    if (!updateVideoEncodeBranchState()) {
+
+        streaming_requested_ = false;
+
+        rtsp_push_stage_->endStreaming();
+
+        return false;
+    }
+
+
     RKCAM_LOGI(
         "[%s] streaming start requested: "
         "url=%s request_pts=%lld",
@@ -1365,8 +1475,12 @@ bool CameraPipeline::stopStreaming()
      *
      * RtspPushStage的Reader/Mux线程继续运行。
      */
-    return rtsp_push_stage_->
-        endStreaming();
+    if(!rtsp_push_stage_->endStreaming())
+    {
+        return false;
+    }
+    streaming_requested_ = false;
+    return updateVideoEncodeBranchState();
 }
 StreamingState CameraPipeline::streamingState() const
 {
@@ -1377,5 +1491,42 @@ StreamingState CameraPipeline::streamingState() const
     }
     return rtsp_push_stage_->streamingState();
 }
+
+bool CameraPipeline::updateVideoEncodeBranchState()
+{
+    if(!video_frame_tee_stage_ || config_.video_encode_output_queue_name.empty())
+    {
+        RKCAM_LOGE(
+            "[%s] video encode gate unavailable",
+            config_.stream_id.c_str());
+
+        return false;
+    }
+    /*
+     * 任意一个消费者需要视频编码，
+     * 整个RGA→MPP分支就必须保持工作。
+     */
+    const bool needed = recording_requested_ || streaming_requested_;
+    const bool current = video_frame_tee_stage_->outputEnabled(config_.video_encode_output_queue_name);
+    if(needed == current)
+    {
+        return true;
+    }
+    if(!video_frame_tee_stage_->setOutputEnabled(config_.video_encode_output_queue_name, needed))
+    {
+        return false;
+    }
+
+    RKCAM_LOGI(
+        "[%s] video encode branch: "
+        "enabled=%d recording=%d streaming=%d",
+        config_.stream_id.c_str(),
+        needed ? 1 : 0,
+        recording_requested_ ? 1 : 0,
+        streaming_requested_ ? 1 : 0);
+
+    return true;
+}
+
 
 } // namespace rkcam

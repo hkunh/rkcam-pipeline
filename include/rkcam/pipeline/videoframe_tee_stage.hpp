@@ -28,14 +28,25 @@ struct VideoFrameTeeStageConfig {
      * <= 0 表示不打印周期日志。
      */
     int log_interval = 30;
+
 };
+
+struct VideoFrameTeeOutputPort{
+    std::string name;
+    BlockingQueue<PipelineVideoFrame>* queue = nullptr;
+    bool enabled = true;
+};
+
+
+
+
 
 class VideoFrameTeeStage : public IStage {
 public:
     VideoFrameTeeStage(
         const VideoFrameTeeStageConfig& config,
         BlockingQueue<PipelineVideoFrame>& input_queue,
-        const std::vector<BlockingQueue<PipelineVideoFrame>*>& output_queues);
+        const std::vector<VideoFrameTeeOutputPort>& outputs);
 
     ~VideoFrameTeeStage() override;
 
@@ -44,6 +55,19 @@ public:
 
     bool start() override;
     void stop() override;
+
+    /*
+     * 可以在Stage启动前或运行中调用。
+     *
+     * false：
+     *   不再向该输出push新frame。
+     *
+     * 注意：
+     *   不stop queue。
+     */
+    bool setOutputEnabled(const std::string& name, bool enabled);
+    bool outputEnabled(const std::string& name) const;
+
 
 private:
     void threadLoop();
@@ -54,14 +78,17 @@ private:
     VideoFrameTeeStageConfig config_;
 
     BlockingQueue<PipelineVideoFrame>& input_queue_;
-    std::vector<BlockingQueue<PipelineVideoFrame>*> output_queues_;
+    std::vector<VideoFrameTeeOutputPort> outputs_;
+
+    mutable std::mutex outputs_mutex_; //允许该成员变量在 const 成员函数（常成员函数）中被修改
 
     std::thread thread_;
     std::atomic<bool> running_{false};
 
-    int input_frames_ = 0;
-    int forwarded_frames_ = 0;
-    int failed_pushes_ = 0;
+    uint64_t input_frames_ = 0;
+    uint64_t forwarded_frames_ = 0;
+    uint64_t skipped_outputs_ = 0;
+    uint64_t failed_pushes_ = 0;
 };
 
 } // namespace rkcam

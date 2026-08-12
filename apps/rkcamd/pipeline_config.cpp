@@ -247,7 +247,7 @@ rkcam::CameraPipelineConfig buildRkcamPipelineConfig()
     tee.video_frame_tee.stage_name = "video_tee";
     tee.video_frame_tee.continue_on_output_fail = true;
     tee.video_frame_tee.log_interval = 30;
-
+    cfg.video_encode_output_queue_name = tee_to_record.name;
     /*
      * ============================================================
      * 4. Preview RGA 分支：Tee -> PreviewRga -> Display
@@ -658,6 +658,7 @@ rkcam::CameraPipelineConfig buildRkcamPipelineConfig()
         mp4_record,
         rtsp_push_cfg,
     };
+
     return cfg;
     // rkcam::CameraPipeline pipeline(cfg);
 }

@@ -125,6 +125,15 @@ struct CameraPipelineConfig {
      *   capture -> rga -> raw_save
      */
     std::vector<StageNodeConfig> nodes;
+
+    /*
+     * 指向VideoFrameTee中负责：
+     *
+     *   RecordRga -> MPP
+     *
+     * 的输出queue。
+     */
+    std::string video_encode_output_queue_name;
 };
 class CameraPipeline{
 public: 
@@ -147,6 +156,8 @@ public:
     bool startStreaming(const std::string& url);
     bool stopStreaming();
     StreamingState streamingState() const;
+
+    bool updateVideoEncodeBranchState();
 private:
     bool initStageNodes();
     bool initStageNodeQueues();
@@ -195,6 +206,7 @@ private:
     MppStage* mpp_stage_ = nullptr;
     Mp4RecordStage* mp4_record_stage_ = nullptr;
     RtspPushStage* rtsp_push_stage_ = nullptr;
+    VideoFrameTeeStage* video_frame_tee_stage_ = nullptr;
     /*
      * 串行化录像 / 推流控制操作。
      *
@@ -203,6 +215,10 @@ private:
      * 都必须经过这个锁协调。
      */
     std::mutex control_mutex_;
+
+
+    bool recording_requested_ = false;
+    bool streaming_requested_ = false;
 };
 
 } // namespace rkcam

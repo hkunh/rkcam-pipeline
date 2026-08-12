@@ -36,7 +36,6 @@ bool sleepSeconds(int seconds)
 }
 
 } // namespace
-
 int main()
 {
     std::signal(
@@ -49,245 +48,389 @@ int main()
 
     /*
      * ============================================================
-     * 1. Build pipeline config
+     * 1. Build pipeline
      * ============================================================
      */
-    rkcam::CameraPipelineConfig config = buildRkcamPipelineConfig();
+    rkcam::CameraPipelineConfig config =
+        buildRkcamPipelineConfig();
 
-    /*
-     * ============================================================
-     * 2. Create CameraService
-     * ============================================================
-     */
     rkcam::CameraService camera_service(
         config);
 
     if (!camera_service.start()) {
         RKCAM_LOGE(
-            "CameraService start failed");
+            "[test] CameraService start failed");
 
         return 1;
     }
 
+    const std::string rtsp_url =
+        "rtsp://192.168.56.100:8554/live";
+
+    const std::string record_file_1 =
+        "/userdata/rkcam/output/"
+        "gate_record_01.mp4";
+
+    const std::string record_file_2 =
+        "/userdata/rkcam/output/"
+        "gate_record_02.mp4";
+
     RKCAM_LOGI(
         "====================================================");
 
     RKCAM_LOGI(
-        "CameraService running");
+        "[test] Encode Gate integration test started");
 
     RKCAM_LOGI(
-        "Dynamic recording test started");
-
-    RKCAM_LOGI(
-        "Preview should remain active during whole test");
+        "[test] Preview must remain active for whole test");
 
     RKCAM_LOGI(
         "====================================================");
+
 
     /*
      * ============================================================
-     * 3. Preview only
+     * 2. Preview only
+     *
+     * Expected:
+     *   recording = false
+     *   streaming = false
+     *   encode gate = OFF
+     *
+     * Check logs:
+     *   preview_rga/display counters keep increasing
+     *   record_rga/mpp counters should NOT keep increasing
      * ============================================================
      */
     RKCAM_LOGI(
-        "[test] preview only: 3 seconds");
+        "[test][1] PREVIEW ONLY: 5 seconds");
 
-    if (!sleepSeconds(3)) {
+    if (!sleepSeconds(5)) {
         camera_service.stop();
         return 0;
     }
 
+
     /*
      * ============================================================
-     * 4. First recording
+     * 3. Start recording
+     *
+     * Expected:
+     *   record=1 stream=0
+     *   encode gate OFF -> ON
+     *   record_rga / MPP resume
      * ============================================================
      */
-    const std::string record_file_1 =
-        "/userdata/rkcam/output/"
-        "dynamic_record_01.mp4";
-
     RKCAM_LOGI(
-        "[test] start recording #1");
+        "[test][2] START RECORDING #1");
 
     if (!camera_service.startRecording(
             record_file_1)) {
 
         RKCAM_LOGE(
-            "[test] recording #1 start failed");
+            "[test] start recording #1 failed");
 
         camera_service.stop();
         return 1;
     }
 
-    /*
-     * 可以稍等一下后检查：
-     * Starting -> Recording
-     */
-    sleepSeconds(1);
+    if (!sleepSeconds(1)) {
+        camera_service.stop();
+        return 0;
+    }
 
     RKCAM_LOGI(
-        "[test] recording #1 state=%d",
+        "[test] recording_state=%d",
         static_cast<int>(
             camera_service.recordingState()));
 
-    /*
-     * 再录9秒，总共约10秒。
-     */
-    if (!sleepSeconds(9)) {
+    if (!sleepSeconds(4)) {
         camera_service.stop();
         return 0;
     }
 
+
+    /*
+     * ============================================================
+     * 4. Stop recording
+     *
+     * Expected:
+     *   record=0 stream=0
+     *   encode gate ON -> OFF
+     *
+     * record_rga / MPP may process a few in-flight frames,
+     * then counters must stop.
+     * ============================================================
+     */
     RKCAM_LOGI(
-        "[test] stop recording #1");
+        "[test][3] STOP RECORDING #1");
 
     if (!camera_service.stopRecording()) {
-
         RKCAM_LOGE(
-            "[test] recording #1 stop failed");
+            "[test] stop recording #1 failed");
 
         camera_service.stop();
         return 1;
     }
 
     RKCAM_LOGI(
-        "[test] recording #1 stopped");
+        "[test] PREVIEW ONLY after recording: "
+        "wait 5 seconds for branch drain");
 
-    /*
-     * ============================================================
-     * 5. Preview only again
-     * ============================================================
-     */
-    RKCAM_LOGI(
-        "[test] preview only again: 3 seconds");
-
-    if (!sleepSeconds(3)) {
+    if (!sleepSeconds(5)) {
         camera_service.stop();
         return 0;
     }
 
+
     /*
      * ============================================================
-     * 6. Second recording
+     * 5. Start streaming
      *
-     * 这是本次测试最重要的一步：
-     * 验证同一个 Mp4RecordStage 不重建线程，
-     * 能重新创建第二个独立MP4会话。
-     * ============================================================
-     */
-    // const std::string record_file_2 =
-    //     "/userdata/rkcam/output/"
-    //     "dynamic_record_02.mp4";
-
-    // RKCAM_LOGI(
-    //     "[test] start recording #2");
-
-    // if (!camera_service.startRecording(
-    //         record_file_2)) {
-
-    //     RKCAM_LOGE(
-    //         "[test] recording #2 start failed");
-
-    //     camera_service.stop();
-    //     return 1;
-    // }
-
-    // sleepSeconds(1);
-
-    // RKCAM_LOGI(
-    //     "[test] recording #2 state=%d",
-    //     static_cast<int>(
-    //         camera_service.recordingState()));
-
-    // if (!sleepSeconds(9)) {
-    //     camera_service.stop();
-    //     return 0;
-    // }
-
-    // RKCAM_LOGI(
-    //     "[test] stop recording #2");
-
-    // if (!camera_service.stopRecording()) {
-
-    //     RKCAM_LOGE(
-    //         "[test] recording #2 stop failed");
-
-    //     camera_service.stop();
-    //     return 1;
-    // }
-
-    /*
-     * ============================================================
-     * 7. Final preview
+     * Expected:
+     *   record=0 stream=1
+     *   encode gate OFF -> ON
      * ============================================================
      */
     RKCAM_LOGI(
-        "[test] dynamic recording passed, "
-        "preview another 3 seconds");
-
-    sleepSeconds(3);
-
-
-    RKCAM_LOGI(
-        "[test] start streaming #1");
+        "[test][4] START STREAMING");
 
     if (!camera_service.startStreaming(
-            "rtsp://192.168.56.100:8554/live")) {
+            rtsp_url)) {
 
         RKCAM_LOGE(
-            "[test] streaming #1 start failed");
+            "[test] start streaming failed");
 
         camera_service.stop();
         return 1;
     }
 
-    sleepSeconds(1);
+    if (!sleepSeconds(1)) {
+        camera_service.stop();
+        return 0;
+    }
 
     RKCAM_LOGI(
-        "[test] streaming #1 state=%d",
+        "[test] streaming_state=%d",
         static_cast<int>(
             camera_service.streamingState()));
 
-    sleepSeconds(9);
-
-    RKCAM_LOGI(
-        "[test] stop streaming #1");
-
-    camera_service.stopStreaming();
-
-    /*
-    * 只预览3秒。
-    */
-    sleepSeconds(3);
-
-    /*
-    * 再推一次。
-    */
-    RKCAM_LOGI(
-        "[test] start streaming #2");
-
-    camera_service.startStreaming(
-        "rtsp://192.168.56.100:8554/live");
-
-    sleepSeconds(30);
-
-    camera_service.stopStreaming();
-
-    sleepSeconds(3);
+    if (!sleepSeconds(4)) {
+        camera_service.stop();
+        return 0;
+    }
 
 
     /*
      * ============================================================
-     * 8. Stop whole camera service
+     * 6. Start recording while streaming
+     *
+     * Expected:
+     *   record=1 stream=1
+     *   encode gate already ON
+     *   must NOT turn off/restart MPP
+     *
+     * A new IDR is allowed for recording start.
      * ============================================================
      */
     RKCAM_LOGI(
-        "CameraService stopping");
+        "[test][5] START RECORDING #2 "
+        "WHILE STREAMING");
+
+    if (!camera_service.startRecording(
+            record_file_2)) {
+
+        RKCAM_LOGE(
+            "[test] start recording #2 failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+    if (!sleepSeconds(1)) {
+        camera_service.stop();
+        return 0;
+    }
+
+    RKCAM_LOGI(
+        "[test] states: recording=%d streaming=%d",
+        static_cast<int>(
+            camera_service.recordingState()),
+        static_cast<int>(
+            camera_service.streamingState()));
+
+    if (!sleepSeconds(4)) {
+        camera_service.stop();
+        return 0;
+    }
+
+
+    /*
+     * ============================================================
+     * 7. Stop recording, streaming must continue
+     *
+     * THIS IS A CRITICAL TEST.
+     *
+     * Expected:
+     *   record=0 stream=1
+     *   encode gate MUST remain ON
+     *   MPP must keep encoding
+     *   RTSP must keep sending
+     * ============================================================
+     */
+    RKCAM_LOGI(
+        "[test][6] STOP RECORDING #2 "
+        "BUT KEEP STREAMING");
+
+    if (!camera_service.stopRecording()) {
+        RKCAM_LOGE(
+            "[test] stop recording #2 failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+    if (!sleepSeconds(5)) {
+        camera_service.stop();
+        return 0;
+    }
+
+    RKCAM_LOGI(
+        "[test] streaming should still be running: "
+        "state=%d",
+        static_cast<int>(
+            camera_service.streamingState()));
+
+
+    /*
+     * ============================================================
+     * 8. Start recording again while streaming
+     *
+     * This checks that MPP stays warm and can dynamically
+     * insert another IDR.
+     * ============================================================
+     */
+    const std::string record_file_3 =
+        "/userdata/rkcam/output/"
+        "gate_record_03.mp4";
+
+    RKCAM_LOGI(
+        "[test][7] START RECORDING #3 "
+        "WHILE STREAMING");
+
+    if (!camera_service.startRecording(
+            record_file_3)) {
+
+        RKCAM_LOGE(
+            "[test] start recording #3 failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+    if (!sleepSeconds(5)) {
+        camera_service.stop();
+        return 0;
+    }
+
+
+    /*
+     * ============================================================
+     * 9. Stop streaming while recording continues
+     *
+     * ANOTHER CRITICAL TEST.
+     *
+     * Expected:
+     *   record=1 stream=0
+     *   encode gate MUST remain ON
+     *   MP4 recording must continue
+     * ============================================================
+     */
+    RKCAM_LOGI(
+        "[test][8] STOP STREAMING "
+        "BUT KEEP RECORDING");
+
+    if (!camera_service.stopStreaming()) {
+        RKCAM_LOGE(
+            "[test] stop streaming failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+    if (!sleepSeconds(5)) {
+        camera_service.stop();
+        return 0;
+    }
+
+    RKCAM_LOGI(
+        "[test] recording should still be running: "
+        "state=%d",
+        static_cast<int>(
+            camera_service.recordingState()));
+
+
+    /*
+     * ============================================================
+     * 10. Stop last consumer
+     *
+     * Expected:
+     *   record=0 stream=0
+     *   encode gate ON -> OFF
+     * ============================================================
+     */
+    RKCAM_LOGI(
+        "[test][9] STOP RECORDING #3");
+
+    if (!camera_service.stopRecording()) {
+        RKCAM_LOGE(
+            "[test] stop recording #3 failed");
+
+        camera_service.stop();
+        return 1;
+    }
+
+
+    /*
+     * ============================================================
+     * 11. Final preview only
+     *
+     * Give the encode branch enough time to naturally drain.
+     *
+     * Expected:
+     *   preview counters keep increasing
+     *   record_rga/mpp may increase a few frames,
+     *   then stay completely unchanged.
+     * ============================================================
+     */
+    RKCAM_LOGI(
+        "[test][10] FINAL PREVIEW ONLY: "
+        "8 seconds");
+
+    if (!sleepSeconds(8)) {
+        camera_service.stop();
+        return 0;
+    }
+
+
+    /*
+     * ============================================================
+     * 12. Stop whole pipeline
+     * ============================================================
+     */
+    RKCAM_LOGI(
+        "[test] CameraService stopping");
 
     camera_service.stop();
 
     RKCAM_LOGI(
-        "dynamic recording test finished");
+        "====================================================");
+
+    RKCAM_LOGI(
+        "[test] Encode Gate integration test finished");
+
+    RKCAM_LOGI(
+        "====================================================");
 
     return 0;
 }
