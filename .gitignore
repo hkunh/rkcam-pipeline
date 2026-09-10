@@ -64,3 +64,6 @@ tmp/
 .cache/
 
 test_outputs
+
+# Local RT-DETR model outputs
+/apps/tools/rknn_deploy/rtdetr_outputs

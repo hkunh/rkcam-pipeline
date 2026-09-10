@@ -1,3 +1,5 @@
+add_subdirectory(ai)
+
 add_library(rkcam_core
     core/log.cpp
     core/timestamp.cpp
@@ -230,6 +232,11 @@ target_link_libraries(rkcam_pipeline PUBLIC
     rkcam::audio_encoder
 )
 add_library(rkcam::pipeline ALIAS rkcam_pipeline)
+
+
+add_subdirectory(
+    platform/rockchip/rknn
+)
 
 
 

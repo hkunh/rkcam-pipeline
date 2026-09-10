@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 
+#自动设置CMAKE_SOURCE_DIR 永远指向最顶层（根目录），不会变
+#自动设置PROJECT_SOURCE_DIR 指向当前 project() 所在的目录，会跟着变
 project(rkcam_pipeline LANGUAGES C CXX)
+
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +32,18 @@ set(CMAKE_BUILD_RPATH "${RKCAM_RUNTIME_RPATH}")
 set(CMAKE_INSTALL_RPATH "${RKCAM_RUNTIME_RPATH}")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
+# ============================================================
+# Third-party platform dependencies
+# ============================================================
+include(
+    "${PROJECT_SOURCE_DIR}/cmake/modules/RKNNRuntime.cmake"
+)
 
+
+
+# ============================================================
+# Project modules
+# ============================================================
 add_subdirectory(src)
 add_subdirectory(apps)
 

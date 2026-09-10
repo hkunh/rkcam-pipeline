@@ -1,0 +1,15 @@
+add_library(
+    rkcam_rknn_custom_ops
+    STATIC
+    grid_sample_custom_op.cpp
+)
+target_include_directories(
+    rkcam_rknn_custom_ops
+    PUBLIC
+        "${PROJECT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+    rkcam_rknn_custom_ops
+    PUBLIC
+        RKNN::Runtime
+)

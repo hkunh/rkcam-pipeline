@@ -78,7 +78,13 @@ $Files = @(
         Name = "audio_aac_test"
         LocalPath = Join-Path $BuildDir "apps\tools\audio_aac_test"
         RemotePath = "/userdata/rkcam/bin/audio_aac_test"
+    },
+    @{
+        Name = "rknn_rgbt_rtdetr_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\rknn_rgbt_rtdetr_test"
+        RemotePath = "/userdata/rkcam/bin/rknn_rgbt_rtdetr_test"
     }
+
 )
 
 Write-Host "Project root: $RootDir"

@@ -115,3 +115,5 @@ target_link_libraries(audio_aac_test PRIVATE
 	rkcam::rga_processor
 	rkcam::drm
 )
+
+add_subdirectory(rknn_deploy)
