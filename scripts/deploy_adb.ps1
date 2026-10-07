@@ -83,6 +83,16 @@ $Files = @(
         Name = "rknn_rgbt_rtdetr_test"
         LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\rknn_rgbt_rtdetr_test"
         RemotePath = "/userdata/rkcam/bin/rknn_rgbt_rtdetr_test"
+    },
+    @{
+        Name = "onnx_rgbt_rtdetr_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\onnx_rgbt_rtdetr_test"
+        RemotePath = "/userdata/rkcam/bin/onnx_rgbt_rtdetr_test"
+    },
+    @{
+        Name = "Hit_input_preprocessor_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\Hit_input_preprocessor_test"
+        RemotePath = "/userdata/rkcam/bin/Hit_input_preprocessor_test"
     }
 
 )

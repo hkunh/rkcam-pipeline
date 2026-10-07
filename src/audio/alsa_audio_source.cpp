@@ -264,6 +264,14 @@ bool AlsaAudioSource::configureSwParams()
         return false;
     }
 
+// | 参数 | Playback | Capture |
+// |---|---|---|
+// | DMA 方向 | Ring Buffer → Device | Device → Ring Buffer |
+// | `start_threshold` | Ring Buffer 中已预填的可播放数据达到该阈值后，自动启动 playback stream | **应用请求读取的 frames 数达到该阈值时，可自动启动 capture stream；不是“已经采集到多少数据后再启动”** |
+// | `avail_min` | Ring Buffer 空闲空间达到该阈值后，应用可被唤醒继续写数据 | Ring Buffer 中可读数据达到该阈值后，应用可被唤醒读取 |
+// | buffer 太小 / 应用太慢 | underrun | overrun |
+// | 应用操作 | `writei()` | `readi()` |
+
     /*
      * avail_min = 一个 period。
      * 表示至少有一个 period 数据可读时再唤醒。
@@ -569,7 +577,28 @@ bool AlsaAudioSource::getAlsaCapturePtsUs(int read_frames, int64_t& pts_us) cons
 //  [音频包首采样] ... [音频包尾采样] │ [缓冲区中尚未读走的数据]
 //  └─── 你刚读走的 read_frames ───┘ └─── 缓冲区积压的 delay ───┘
 //  └─────────────────── 跨越的总帧数 pending_frames ──────────┘
-
+// 第一档：
+// 真正的硬件/link timestamp
+// 例如 I2S/sample counter/专用 wallclock
+// ↓
+// snd_pcm_status_get_audio_htstamp()
+// 并且 actual_type = LINK 等
+// 第二档：
+// DMA/hw_ptr 推导出来的 audio timestamp
+// ↓
+// snd_pcm_status_get_audio_htstamp()
+// actual_type = DEFAULT
+// 第三档：
+// ALSA system status timestamp
+// + hw_ptr/delay 反推 sample time
+// ↓
+// 你现在的方案
+// 第四档：
+// snd_pcm_readi() 返回
+// ↓
+// 应用自己 clock_gettime()
+// 第五档：
+// PCM 进入后级线程/queue 后再打时间戳
     pts_us = 0;
 
     if (!handle_ || read_frames <= 0 || actual_sample_rate_ <= 0) {

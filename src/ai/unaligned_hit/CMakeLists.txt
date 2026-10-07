@@ -1,0 +1,15 @@
+add_library(
+    rkcam_ai_unalignedHit
+    STATIC
+    hit_input_processor.cpp
+)
+target_include_directories(
+    rkcam_ai_unalignedHit
+    PUBLIC
+        "${CMAKE_SOURCE_DIR}/include"
+)
+target_link_libraries(
+    rkcam_ai_unalignedHit
+    PUBLIC
+        RKNN::Runtime
+)

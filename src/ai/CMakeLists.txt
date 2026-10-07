@@ -21,3 +21,7 @@ target_link_libraries(
         rkcam_rknn_custom_ops
 )
 add_library(rkcam::ai ALIAS rkcam_ai)
+
+add_subdirectory(
+    unaligned_hit
+)

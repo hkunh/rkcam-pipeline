@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 #自动设置CMAKE_SOURCE_DIR 永远指向最顶层（根目录），不会变
-#自动设置PROJECT_SOURCE_DIR 指向当前 project() 所在的目录，会跟着变
+#而PROJECT_SOURCE_DIR 指向当前 project() 所在的目录，会跟着变
 project(rkcam_pipeline LANGUAGES C CXX)
 
 
@@ -37,6 +37,9 @@ set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 # ============================================================
 include(
     "${PROJECT_SOURCE_DIR}/cmake/modules/RKNNRuntime.cmake"
+)
+include(
+    "${PROJECT_SOURCE_DIR}/cmake/modules/ONNXRuntime.cmake"
 )
 
 
