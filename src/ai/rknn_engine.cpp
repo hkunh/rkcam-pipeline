@@ -198,13 +198,91 @@ bool shapesCompatible(
            in_w == exp_w;
 
 }
+FloatTensor convertNchwToNhwc(
+    const FloatTensor& src
+)
+{
+    if (
+        src.layout != TensorLayout::NCHW ||
+        src.shape.dims.size() != 4
+    )
+    {
+        throw std::invalid_argument(
+            "convertNchwToNhwc expects rank-4 NCHW tensor"
+        );
+    }
+
+    const std::int64_t n = src.shape.dims[0];
+    const std::int64_t c = src.shape.dims[1];
+    const std::int64_t h = src.shape.dims[2];
+    const std::int64_t w = src.shape.dims[3];
+
+    if (
+        n <= 0 ||
+        c <= 0 ||
+        h <= 0 ||
+        w <= 0
+    )
+    {
+        throw std::invalid_argument(
+            "convertNchwToNhwc got invalid shape"
+        );
+    }
+
+    FloatTensor dst;
+
+    dst.shape.dims = {
+        n,
+        h,
+        w,
+        c
+    };
+
+    dst.layout = TensorLayout::NHWC;
+
+    dst.data.resize(
+        src.data.size()
+    );
+
+    for (std::int64_t ni = 0; ni < n; ++ni)
+    {
+        for (std::int64_t yi = 0; yi < h; ++yi)
+        {
+            for (std::int64_t xi = 0; xi < w; ++xi)
+            {
+                for (std::int64_t ci = 0; ci < c; ++ci)
+                {
+                    const std::size_t src_index =
+                        static_cast<std::size_t>(
+                            ((ni * c + ci) * h + yi) * w + xi
+                        );
+
+                    const std::size_t dst_index =
+                        static_cast<std::size_t>(
+                            ((ni * h + yi) * w + xi) * c + ci
+                        );
+
+                    dst.data[dst_index] =
+                        src.data[src_index];
+                }
+            }
+        }
+    }
+
+    return dst;
+}
+
 }//namespace
 
 
 struct RknnEngine::Impl{
-    explicit Impl(std::string path) : model_path(std::move(path)){}
+    explicit Impl(std::string path, bool enable_grid_sample) : 
+        model_path(std::move(path)), 
+        enable_grid_sample_custom_op(enable_grid_sample)
+    {}
 
     std::string model_path;
+    bool enable_grid_sample_custom_op = true;
     rknn_context context = 0;
     bool initialized = false;
 
@@ -281,7 +359,7 @@ struct RknnEngine::Impl{
 
 
 
-RknnEngine::RknnEngine(std::string model_path) : impl_(std::make_unique<Impl>(std::move(model_path))) 
+RknnEngine::RknnEngine(std::string model_path, bool enable_grid_sample_custom_op) : impl_(std::make_unique<Impl>(std::move(model_path), enable_grid_sample_custom_op)) 
 {
 
 }
@@ -323,16 +401,30 @@ bool RknnEngine::init()
     // ============================================================
     // Register GridSample custom CPU op
     // ============================================================
-    const int custom_op_ret = rkcam::platform::rockchip::rknn::registerGridSampleCustomOp(impl_->context);
-    if (custom_op_ret != RKNN_SUCC)
-    {
-        impl_->destroyContext();
-        impl_->clearMetadata();
+    // ============================================================
+    // Optional GridSample custom CPU op
+    // ============================================================
 
-        return impl_->fail(
-            makeRknnError(
-                "registerGridSampleCustomOp",
-                custom_op_ret));
+    if (impl_->enable_grid_sample_custom_op)
+    {
+        const int custom_op_ret =
+            rkcam::platform::rockchip::rknn::
+            registerGridSampleCustomOp(
+                impl_->context
+            );
+
+        if (custom_op_ret != RKNN_SUCC)
+        {
+            impl_->destroyContext();
+            impl_->clearMetadata();
+
+            return impl_->fail(
+                makeRknnError(
+                    "registerGridSampleCustomOp",
+                    custom_op_ret
+                )
+            );
+        }
     }
 
     rknn_sdk_version sdk_version;
@@ -509,6 +601,7 @@ bool RknnEngine::inferImpl(
         return impl_->fail("input tensor pointer is null");
     }
 
+    std::vector<FloatTensor> prepared_inputs(input_count);
     std::vector<rknn_input> rknn_inputs(input_count);
     std::memset(
         rknn_inputs.data(),
@@ -534,15 +627,53 @@ bool RknnEngine::inferImpl(
             oss << "input[" << i << "] shape/layout does not match model input";
             return impl_->fail(oss.str());
         }
-        rknn_tensor_format fmt = RKNN_TENSOR_UNDEFINED;
-        if(!toRknnLayout(input.layout, fmt))
+        if (
+            input.layout == TensorLayout::NCHW &&
+            expected.layout == TensorLayout::NHWC
+        )
         {
-            std::ostringstream oss;
-            oss << "input[" << i << "] has unsupported/unknown layout";
-            return impl_->fail(oss.str());
+            prepared_inputs[i] =convertNchwToNhwc(
+                    input
+                );
+        }
+        else
+        {
+            prepared_inputs[i] = input;
+        }
+        const auto& actual = prepared_inputs[i];
+        rknn_tensor_format fmt = RKNN_TENSOR_UNDEFINED;
+        if (actual.layout == TensorLayout::Unknown)
+        {
+            // 非图像 tensor，例如 HiT:
+            //
+            // template_geometry [1,4]
+            //
+            // RKNN 对这类 rank-2 tensor 没有 NCHW/NHWC 布局语义，
+            // inputAttr() 也会报告 Unknown。
+            //
+            // 此时使用 RKNN_TENSOR_UNDEFINED 即可。
+            if (expected.layout != TensorLayout::Unknown)
+            {
+                std::ostringstream oss;
+                oss
+                    << "input[" << i << "] layout is Unknown, "
+                    << "but model expects a concrete layout";
+                return impl_->fail(oss.str());
+            }
+            fmt = RKNN_TENSOR_UNDEFINED;
+        }
+        else
+        {
+            if (!toRknnLayout(actual.layout, fmt))
+            {
+                std::ostringstream oss;
+                oss
+                    << "input[" << i << "] has unsupported layout";
+                return impl_->fail(oss.str());
+            }
         }
 
-        const std::size_t byte_size = input.data.size() * sizeof(float);
+        const std::size_t byte_size = actual.data.size() * sizeof(float);
         if(byte_size > std::numeric_limits<std::uint32_t>::max())
         {
             std::ostringstream oss;
@@ -552,7 +683,7 @@ bool RknnEngine::inferImpl(
 
         auto& rknn_input = rknn_inputs[i];
         rknn_input.index = static_cast<std::uint32_t>(i);
-        rknn_input.buf = const_cast<float*>(input.data.data()); //去掉 const 属性
+        rknn_input.buf = const_cast<float*>(actual.data.data()); //去掉 const 属性
         rknn_input.size = static_cast<std::uint32_t>(byte_size);
         rknn_input.pass_through = 0;
         rknn_input.type = RKNN_TENSOR_FLOAT32;

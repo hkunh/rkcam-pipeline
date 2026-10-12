@@ -4,8 +4,8 @@
 
 set(
     RKNN_VERSION
-#    "2.3.2"
-    "2.4.2a15"
+    "2.3.2"
+#    "2.4.2a15"
 )
 set(
     RKNN_ROOT

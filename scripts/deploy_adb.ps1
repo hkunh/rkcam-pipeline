@@ -93,8 +93,22 @@ $Files = @(
         Name = "Hit_input_preprocessor_test"
         LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\Hit_input_preprocessor_test"
         RemotePath = "/userdata/rkcam/bin/Hit_input_preprocessor_test"
+    },
+    @{
+        Name = "rknn_rgbt_hit_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\rknn_rgbt_hit_test"
+        RemotePath = "/userdata/rkcam/bin/rknn_rgbt_hit_test"
+    },
+    @{
+        Name = "onnx_rgbt_hit_test"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\onnx_rgbt_hit_test"
+        RemotePath = "/userdata/rkcam/bin/onnx_rgbt_hit_test"
+    },
+    @{
+        Name = "hit_onnx_rknn_compare_generic"
+        LocalPath = Join-Path $BuildDir "apps\tools\rknn_deploy\hit_onnx_rknn_compare_generic"
+        RemotePath = "/userdata/rkcam/bin/hit_onnx_rknn_compare_generic"
     }
-
 )
 
 Write-Host "Project root: $RootDir"

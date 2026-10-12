@@ -2,6 +2,7 @@ add_library(
     rkcam_ai_unalignedHit
     STATIC
     hit_input_processor.cpp
+    hit_model_runner.cpp
 )
 target_include_directories(
     rkcam_ai_unalignedHit
@@ -12,4 +13,7 @@ target_link_libraries(
     rkcam_ai_unalignedHit
     PUBLIC
         RKNN::Runtime
+        rkcam_ai
 )
+
+

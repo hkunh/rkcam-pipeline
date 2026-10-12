@@ -9,7 +9,7 @@ namespace rkcam::ai{
 
 class RknnEngine {
 public:
-    explicit RknnEngine(std::string model_path);
+    explicit RknnEngine(std::string model_path, bool enable_grid_sample_custom_op = true);
     ~RknnEngine();
 
     RknnEngine(const RknnEngine&) = delete;
